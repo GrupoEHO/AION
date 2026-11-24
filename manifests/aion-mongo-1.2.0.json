@@ -36,6 +36,15 @@
       "async": true,
       "errs": ["connection_failed", "timeout", "not_found"]
     },
+    "find_many": {
+      "args": [
+        { "n": "collection", "t": "str" },
+        { "n": "filter", "t": "map<str, any>" }
+      ],
+      "ret": "list<any>",
+      "async": true,
+      "errs": ["connection_failed", "timeout", "invalid_query"]
+    },
     "ins": {
       "args": [
         { "n": "collection", "t": "str" },

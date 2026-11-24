@@ -96,6 +96,21 @@ impl MongoPlugin {
         })
     }
 
+    fn op_find_many(&self, collection: &str, filter: Document) -> Result<ExtValue, String> {
+        let db = self.database()?;
+        let col_name = collection.to_string();
+        self.run_async(async move {
+            let col = db.collection::<Document>(&col_name);
+            let mut cursor = col.find(filter).await.map_err(map_mongo_err)?;
+            let mut results = Vec::new();
+            while cursor.advance().await.map_err(map_mongo_err)? {
+                let doc = cursor.deserialize_current().map_err(map_mongo_err)?;
+                results.push(bson_doc_to_ext_value(&doc));
+            }
+            Ok(ExtValue::List(results))
+        })
+    }
+
     fn op_ins(&self, collection: &str, doc: Document) -> Result<ExtValue, String> {
         let db = self.database()?;
         let col_name = collection.to_string();
@@ -185,6 +200,17 @@ impl ExtPlugin for MongoPlugin {
                 let col = expect_str(&args[0], "collection").map_err(wrap_err)?;
                 let filter = ext_value_to_doc(&args[1]).map_err(wrap_err)?;
                 self.op_find_one(col, filter).map_err(wrap_err)
+            }
+            "find_many" => {
+                if args.len() != 2 {
+                    return Err(wrap_err(format!(
+                        "expected 2 arguments (collection, filter), got {}",
+                        args.len()
+                    )));
+                }
+                let col = expect_str(&args[0], "collection").map_err(wrap_err)?;
+                let filter = ext_value_to_doc(&args[1]).map_err(wrap_err)?;
+                self.op_find_many(col, filter).map_err(wrap_err)
             }
             "ins" => {
                 if args.len() != 2 {
@@ -331,7 +357,7 @@ mod tests {
         assert_eq!(manifest.id, "aion/mongo");
         assert_eq!(manifest.ver, "1.2.0");
 
-        for expected_fn in ["connect", "find_one", "ins", "upd", "del"] {
+        for expected_fn in ["connect", "find_one", "find_many", "ins", "upd", "del"] {
             assert!(
                 manifest.fns.contains_key(expected_fn),
                 "missing expected fn `{expected_fn}` in manifest"

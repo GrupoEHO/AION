@@ -33,8 +33,7 @@ fn read_file_or_exit(path: &Path) -> String {
     }
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
         eprintln!(
@@ -117,7 +116,14 @@ async fn main() {
                 println!("{}", report.to_json_pretty().unwrap());
                 process::exit(1);
             }
-            if let Err(e) = serve(prog, Arc::new(reg), RuntimeConfig::new()).await {
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .unwrap_or_else(|e| {
+                    eprintln!("{{\"ok\":false,\"error\":\"tokio runtime error: {e}\"}}");
+                    process::exit(1);
+                });
+            if let Err(e) = rt.block_on(serve(prog, Arc::new(reg), RuntimeConfig::new())) {
                 eprintln!("{{\"ok\":false,\"error\":\"{e}\"}}");
                 process::exit(1);
             }

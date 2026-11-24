@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "aion": {
+      "command": "/Users/soporte/gh/AION/target/debug/aion",
+      "args": [
+        "mcp",
+        "--manifests-dir",
+        "/Users/soporte/gh/AION/manifests"
+      ]
+    }
+  }
+}
