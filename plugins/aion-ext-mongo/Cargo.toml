@@ -1,0 +1,12 @@
+[package]
+name = "aion-ext-mongo"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+aion-ext.workspace = true
+mongodb = "3"
+serde.workspace = true
+serde_json.workspace = true
+tokio = { version = "1", features = ["rt", "rt-multi-thread"] }

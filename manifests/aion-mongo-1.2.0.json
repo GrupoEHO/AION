@@ -1,0 +1,68 @@
+{
+  "abi": 1,
+  "id": "aion/mongo",
+  "ver": "1.2.0",
+  "caps": ["net", "env"],
+  "types": {
+    "MongoDoc": {
+      "id": "str"
+    },
+    "UpdateResult": {
+      "matched": "i32",
+      "modified": "i32"
+    }
+  },
+  "errs": [
+    "connection_failed",
+    "timeout",
+    "invalid_query",
+    "not_found"
+  ],
+  "fns": {
+    "connect": {
+      "args": [
+        { "n": "uri", "t": "str" }
+      ],
+      "ret": "void",
+      "async": true,
+      "errs": ["connection_failed", "timeout"]
+    },
+    "find_one": {
+      "args": [
+        { "n": "collection", "t": "str" },
+        { "n": "filter", "t": "map<str, any>" }
+      ],
+      "ret": "any",
+      "async": true,
+      "errs": ["connection_failed", "timeout", "not_found"]
+    },
+    "ins": {
+      "args": [
+        { "n": "collection", "t": "str" },
+        { "n": "doc", "t": "map<str, any>" }
+      ],
+      "ret": "@MongoDoc",
+      "async": true,
+      "errs": ["connection_failed", "timeout", "invalid_query"]
+    },
+    "upd": {
+      "args": [
+        { "n": "collection", "t": "str" },
+        { "n": "filter", "t": "map<str, any>" },
+        { "n": "update", "t": "map<str, any>" }
+      ],
+      "ret": "any",
+      "async": true,
+      "errs": ["connection_failed", "timeout", "invalid_query", "not_found"]
+    },
+    "del": {
+      "args": [
+        { "n": "collection", "t": "str" },
+        { "n": "filter", "t": "map<str, any>" }
+      ],
+      "ret": "i32",
+      "async": true,
+      "errs": ["connection_failed", "timeout"]
+    }
+  }
+}

@@ -1,0 +1,114 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://aion.dev/schemas/ext-abi-v1.json",
+    "title": "AION External Module ABI Manifest",
+    "type": "object",
+    "required": [
+        "abi",
+        "id",
+        "ver",
+        "caps",
+        "fns"
+    ],
+    "additionalProperties": false,
+    "properties": {
+        "abi": {
+            "type": "integer",
+            "const": 1,
+            "description": "Versión del protocolo ABI del compilador."
+        },
+        "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9-]+/[a-z0-9-]+$",
+            "description": "Identificador canónico del módulo (ej. aion/mongo)."
+        },
+        "ver": {
+            "type": "string",
+            "pattern": "^\\d+\\.\\d+\\.\\d+$"
+        },
+        "caps": {
+            "type": "array",
+            "items": {
+                "type": "string",
+                "enum": [
+                    "net",
+                    "env",
+                    "fs_read",
+                    "fs_write",
+                    "crypto",
+                    "clock"
+                ]
+            },
+            "description": "Permisos de runtime requeridos por el módulo."
+        },
+        "types": {
+            "type": "object",
+            "description": "Structs u objetos complejos propios del módulo.",
+            "additionalProperties": {
+                "type": "object",
+                "additionalProperties": {
+                    "type": "string"
+                }
+            }
+        },
+        "errs": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            },
+            "description": "Catálogo cerrado de códigos de error que puede emitir el módulo."
+        },
+        "fns": {
+            "type": "object",
+            "description": "Mapa de funciones expuestas por el módulo.",
+            "additionalProperties": {
+                "type": "object",
+                "required": [
+                    "args",
+                    "ret",
+                    "async"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                    "args": {
+                        "type": "array",
+                        "description": "Argumentos posicionales estrictos: [nombre, tipo, opcional?]",
+                        "items": {
+                            "type": "object",
+                            "required": [
+                                "n",
+                                "t"
+                            ],
+                            "properties": {
+                                "n": {
+                                    "type": "string"
+                                },
+                                "t": {
+                                    "type": "string"
+                                },
+                                "opt": {
+                                    "type": "boolean",
+                                    "default": false
+                                }
+                            }
+                        }
+                    },
+                    "ret": {
+                        "type": "string",
+                        "description": "Tipo de retorno (primitivo, void, any, o @Tipo definido en types)."
+                    },
+                    "async": {
+                        "type": "boolean"
+                    },
+                    "errs": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "description": "Subconjunto de errs que esta función puede lanzar."
+                    }
+                }
+            }
+        }
+    }
+}

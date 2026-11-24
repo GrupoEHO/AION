@@ -1,0 +1,38 @@
+{
+  "abi": 1,
+  "id": "aion/firebase-auth",
+  "ver": "2.0.0",
+  "caps": ["net", "env", "crypto"],
+  "types": {
+    "AuthUser": {
+      "uid": "str",
+      "email": "str",
+      "verified": "bool"
+    }
+  },
+  "errs": [
+    "invalid_token",
+    "expired_token",
+    "unauthorized",
+    "network_error"
+  ],
+  "fns": {
+    "verify": {
+      "args": [
+        { "n": "token", "t": "str" },
+        { "n": "project_id", "t": "str" }
+      ],
+      "ret": "@AuthUser",
+      "async": true,
+      "errs": ["invalid_token", "expired_token", "network_error"]
+    },
+    "revoke": {
+      "args": [
+        { "n": "uid", "t": "str" }
+      ],
+      "ret": "void",
+      "async": true,
+      "errs": ["unauthorized", "network_error"]
+    }
+  }
+}

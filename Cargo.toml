@@ -1,0 +1,29 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/aion-ast",
+    "crates/aion-parser",
+    "crates/aion-ext",
+    "crates/aion-checker",
+    "crates/aion-runtime-net",
+    "crates/aion-cli",
+    "plugins/aion-ext-firebase",
+    "plugins/aion-ext-mongo",
+    # Deferred for Phase 2 (GPU/WASM/ARM64 UI engine):
+    # "crates/aion-runtime-ui",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+chumsky = "0.9"
+aion-ast = { path = "crates/aion-ast" }
+aion-parser = { path = "crates/aion-parser" }
+aion-ext = { path = "crates/aion-ext" }
+aion-checker = { path = "crates/aion-checker" }
