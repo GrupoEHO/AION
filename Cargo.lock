@@ -64,6 +64,7 @@ dependencies = [
  "aion-parser",
  "aion-runtime-net",
  "aion-runtime-ui",
+ "axum",
  "serde",
  "serde_json",
  "tokio",

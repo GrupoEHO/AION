@@ -1,4 +1,5 @@
 pub mod mcp;
+pub mod web;
 
 use std::fs;
 use std::path::Path;

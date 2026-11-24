@@ -17,6 +17,7 @@ aion-ext-mongo = { path = "../../plugins/aion-ext-mongo" }
 aion-parser.workspace = true
 aion-runtime-net = { path = "../aion-runtime-net" }
 aion-runtime-ui = { path = "../aion-runtime-ui", default-features = false }
+axum = "0.8"
 serde.workspace = true
 serde_json.workspace = true
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

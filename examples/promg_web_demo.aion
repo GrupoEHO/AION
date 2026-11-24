@@ -1,0 +1,27 @@
+// PROMG Web Demo en AION — Backend (#SRV/#M/#API) + Frontend Web (#S/#N) en un solo grafo plano
+#SRV0:HTTP[port:8080, proto:on]
+
+// Contrato único compartido entre Backend y Frontend
+#M0:FeedbackRes{id:str, title:str, total:i32, status:str}
+
+// Endpoint REST/Protobuf que procesa el feedback y devuelve el nuevo contador
+#API0:#SRV0.POST["/v1/feedback"] IN{title:str, current:i32} OUT{#M0} {
+  {id: "FB-101", title: in.title, total: in.current + 1, status: "recibido"} -> RET
+}
+
+// Estado Reactivo (Signals)
+#S0:str=""
+#S1:i32=0
+#S2:str="Conectado a AION Runtime"
+
+// Interfaz Gráfica Plana (Zero Nesting) — validada para móvil (390x844) y desktop (1440x900)
+#N0:ROOT[0,0,100%,100%,#F8FAFC]{#N1}
+#N1:FLEX[v,s,c,16]{#N2,#N3,#N4,#N5,#N6,#N7}
+#N2:NAV[100%,56,#0F172A]{#N8}
+#N3:TXT[22,700,#0F172A]{"PROMG · Demo Web AION"}
+#N4:TXT[16,600,#2563EB]{"Feedbacks enviados: {#S1}"}
+#N5:INP[340,44,8,#FFFFFF,#S0]{"Escribe una sugerencia..."}
+#N6:BTN[220,46,8,#2563EB]{#N9} @tap->CALL(#API0,{title:#S0,current:#S1})=>#S1=res.total @err->TOAST("Error al enviar")
+#N7:TXT[14,400,#475569]{"{#S2} · Borrador: {#S0}"}
+#N8:TXT[15,700,#FFFFFF]{"AION Web · Taffy + Signals"}
+#N9:TXT[15,600,#FFFFFF]{"Enviar Feedback (+1)"}
