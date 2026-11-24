@@ -304,3 +304,44 @@ async fn http_401_and_network_errors_trigger_err_toast_handler() {
     );
     assert_eq!(offline_rt.toasts, vec!["Error".to_string()]);
 }
+
+#[tokio::test]
+async fn crud_widgets_inp_list_and_nav_work_end_to_end() {
+    let src = r#"
+#S0:str=""
+#N0:ROOT[0,0,100%,100%,#F8FAFC]{#N1}
+#N1:FLEX[v,s,c,12]{#N2,#N3,#N4}
+#N2:INP[320,44,8,#FFFFFF,#S0]{"Buscar feedback..."}
+#N3:LIST[v,8]{#N5}
+#N4:NAV[100%,56,#0F172A]{#N6}
+#N5:TXT[16,400,#0F172A]{"Filtro: {#S0}"}
+#N6:BTN[100,40,6,#2563EB]{} @tap->NAV(#N3)
+"#;
+    let prog = parse_program(src).unwrap();
+    let mut rt = UiRuntime::new(prog.clone(), Arc::new(FailingTransport)).unwrap();
+
+    // Typing into #N2:INP updates bound signal #S0 and marks #N5 dirty.
+    let dirtied = rt.input_change(&NodeId::new("#N2"), "urgente").unwrap();
+    assert!(dirtied.contains(&NodeId::new("#N5")));
+    assert_eq!(
+        rt.signals.get(&NodeId::new("#S0")),
+        Some(&SignalValue::Str("urgente".to_string()))
+    );
+    assert_eq!(
+        rt.signals.resolve_text("Filtro: {#S0}"),
+        "Filtro: urgente"
+    );
+
+    // Tapping #N6 triggers NAV(#N3).
+    rt.dispatch_event(&NodeId::new("#N6"), "tap").await.unwrap();
+    assert_eq!(rt.active_route, Some(NodeId::new("#N3")));
+
+    // Layout on mobile 390x844 has zero overflows.
+    let mobile = aion_runtime_ui::compute_layout(
+        &prog,
+        aion_runtime_ui::Viewport::MOBILE,
+        Some(&rt.signals),
+    )
+    .unwrap();
+    assert!(mobile.detect_overflows().is_empty());
+}

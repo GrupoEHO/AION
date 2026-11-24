@@ -11,11 +11,17 @@ use crate::{RuntimeConfig, RuntimeNetError};
 #[derive(Debug, Clone, Default)]
 pub struct RequestContext {
     pub headers: HashMap<String, String>,
+    pub params: HashMap<String, String>,
+    pub query: HashMap<String, String>,
     pub vars: BTreeMap<String, ExtValue>,
 }
 
 impl RequestContext {
-    pub fn from_headers(headers: &axum::http::HeaderMap) -> Self {
+    pub fn from_request(
+        headers: &axum::http::HeaderMap,
+        params: HashMap<String, String>,
+        query: HashMap<String, String>,
+    ) -> Self {
         let mut map = HashMap::new();
         for (name, val) in headers {
             if let Ok(s) = val.to_str() {
@@ -24,8 +30,14 @@ impl RequestContext {
         }
         Self {
             headers: map,
+            params,
+            query,
             vars: BTreeMap::new(),
         }
+    }
+
+    pub fn from_headers(headers: &axum::http::HeaderMap) -> Self {
+        Self::from_request(headers, HashMap::new(), HashMap::new())
     }
 
     pub fn header(&self, name: &str) -> Option<&str> {
@@ -405,6 +417,24 @@ fn eval_ctx_method(
             let val = args.get(1).cloned().unwrap_or(ExtValue::Void);
             ctx.vars.insert(key, val);
             Ok(ExtValue::Void)
+        }
+        "param" => {
+            let key = args
+                .first()
+                .map(ext_value_to_string)
+                .unwrap_or_default();
+            Ok(ExtValue::Str(
+                ctx.params.get(&key).cloned().unwrap_or_default(),
+            ))
+        }
+        "query" => {
+            let key = args
+                .first()
+                .map(ext_value_to_string)
+                .unwrap_or_default();
+            Ok(ExtValue::Str(
+                ctx.query.get(&key).cloned().unwrap_or_default(),
+            ))
         }
         other => Err(RuntimeNetError::Eval(format!(
             "unknown `ctx.{other}` method"

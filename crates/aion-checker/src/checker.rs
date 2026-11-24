@@ -1093,6 +1093,36 @@ impl<'a> Checker<'a> {
                 }
                 AionType::Void
             }
+            "param" => {
+                if args.len() != 1 {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            "E_ARG_COUNT",
+                            Phase::Checker,
+                            format!("`ctx.param` expects 1 argument (route param name), found {}", args.len()),
+                            span,
+                        )
+                        .with_node_id(node_id)
+                        .with_expected("ctx.param(name: str) -> str"),
+                    );
+                }
+                AionType::Str
+            }
+            "query" => {
+                if args.len() != 1 {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            "E_ARG_COUNT",
+                            Phase::Checker,
+                            format!("`ctx.query` expects 1 argument (query param name), found {}", args.len()),
+                            span,
+                        )
+                        .with_node_id(node_id)
+                        .with_expected("ctx.query(name: str) -> str"),
+                    );
+                }
+                AionType::Str
+            }
             other => {
                 self.diagnostics.push(
                     Diagnostic::error(
@@ -1102,9 +1132,9 @@ impl<'a> Checker<'a> {
                         span,
                     )
                     .with_node_id(node_id)
-                    .with_expected("hdr, get, set")
+                    .with_expected("hdr, get, set, param, query")
                     .with_found(other.to_string())
-                    .with_fix_hint("Use one of `ctx.hdr(name)`, `ctx.get(key)`, or `ctx.set(key, value)`."),
+                    .with_fix_hint("Use one of `ctx.hdr(name)`, `ctx.get(key)`, `ctx.set(key, value)`, `ctx.param(name)`, or `ctx.query(name)`."),
                 );
                 AionType::Unknown
             }

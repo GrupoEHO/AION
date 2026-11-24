@@ -266,3 +266,30 @@ async fn api_succeeds_with_json_and_binary_protobuf() {
     assert!(schema_text.contains("message User {"));
     assert!(schema_text.contains("message Api0In {"));
 }
+
+#[tokio::test]
+async fn supports_route_params_and_query_strings() {
+    let src = r#"
+#SRV0:HTTP[port:8080, proto:on]
+#M0:FeedbackItem{id:str, status:str}
+#API0:#SRV0.GET["/v1/feedback/:id"] OUT{#M0} {
+  {id: ctx.param("id"), status: ctx.query("status")} -> RET
+}
+"#;
+    let prog = parse_program(src).unwrap();
+    let router = build_router(prog, Arc::new(ExtRegistry::new()), RuntimeConfig::new()).unwrap();
+
+    let req = Request::builder()
+        .method("GET")
+        .uri("/v1/feedback/fb-42?status=open")
+        .header(header::ACCEPT, JSON_MIME)
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["id"], "fb-42");
+    assert_eq!(json["status"], "open");
+}

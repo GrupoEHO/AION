@@ -452,6 +452,62 @@ fn ui_node_to_style(ui: &UiNode, signals: Option<&SignalStore>) -> (Style, bool)
             };
             (style, false)
         }
+        "INP" => {
+            // INP[width, height, radius, bg_hex, #S_bound?]{"placeholder"}
+            let width = arg_as_dim(ui.args.first()).unwrap_or_else(|| length(240.0_f32));
+            let height = arg_as_dim(ui.args.get(1)).unwrap_or_else(|| length(44.0_f32));
+            let style = Style {
+                display: Display::Flex,
+                flex_direction: FlexDirection::Row,
+                align_items: Some(AlignItems::Center),
+                flex_shrink: 0.0,
+                size: Size { width, height },
+                ..Default::default()
+            };
+            (style, false)
+        }
+        "LIST" => {
+            // LIST[dir(v|h), gap, noscroll?]{#N_items...}
+            let flex_direction = match arg_as_ident(ui.args.first()) {
+                Some("h") | Some("row") => FlexDirection::Row,
+                _ => FlexDirection::Column,
+            };
+            let gap_px = arg_as_f32(ui.args.get(1)).unwrap_or(8.0);
+            let is_scrollable = !ui
+                .args
+                .iter()
+                .any(|a| matches!(a, UiArg::Ident(s) if s == "noscroll"));
+            let style = Style {
+                display: Display::Flex,
+                flex_direction,
+                gap: Size {
+                    width: length(gap_px),
+                    height: length(gap_px),
+                },
+                flex_grow: 1.0,
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: auto(),
+                },
+                ..Default::default()
+            };
+            (style, is_scrollable)
+        }
+        "NAV" => {
+            // NAV[width, height, bg_hex]{#N_tabs...}
+            let width = arg_as_dim(ui.args.first()).unwrap_or_else(|| percent(1.0_f32));
+            let height = arg_as_dim(ui.args.get(1)).unwrap_or_else(|| length(56.0_f32));
+            let style = Style {
+                display: Display::Flex,
+                flex_direction: FlexDirection::Row,
+                justify_content: Some(JustifyContent::SpaceAround),
+                align_items: Some(AlignItems::Center),
+                flex_shrink: 0.0,
+                size: Size { width, height },
+                ..Default::default()
+            };
+            (style, false)
+        }
         _ => {
             let width = arg_as_dim(ui.args.first()).unwrap_or_else(auto);
             let height = arg_as_dim(ui.args.get(1)).unwrap_or_else(auto);

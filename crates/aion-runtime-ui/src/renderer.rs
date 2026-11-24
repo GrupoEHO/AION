@@ -239,6 +239,73 @@ pub fn build_display_list(
                     color,
                 });
             }
+            "INP" => {
+                let radius = match ui.args.get(2) {
+                    Some(UiArg::Int(r)) => *r as f32,
+                    Some(UiArg::Float(r)) => *r as f32,
+                    _ => 6.0,
+                };
+                let color = ui
+                    .args
+                    .get(3)
+                    .and_then(|a| match a {
+                        UiArg::HexColor(c) => parse_hex_color(c),
+                        _ => None,
+                    })
+                    .unwrap_or([1.0, 1.0, 1.0, 1.0]);
+                list.push(RenderPrimitive::RoundedRect {
+                    node_id: id.clone(),
+                    x: lbox.x,
+                    y: lbox.y,
+                    width: lbox.width,
+                    height: lbox.height,
+                    radius,
+                    color,
+                });
+                let bound_val = ui.args.get(4).and_then(|a| match a {
+                    UiArg::NodeRef(sig_id) => signals.get(sig_id).map(|v| v.to_string()),
+                    _ => None,
+                });
+                let placeholder = match &ui.body {
+                    UiBody::Text { template, .. } => signals.resolve_text(template),
+                    _ => String::new(),
+                };
+                let display_text = match bound_val {
+                    Some(v) if !v.is_empty() => v,
+                    _ => placeholder,
+                };
+                if !display_text.is_empty() {
+                    list.push(RenderPrimitive::Text {
+                        node_id: id.clone(),
+                        x: lbox.x + 12.0,
+                        y: lbox.y + 12.0,
+                        width: (lbox.width - 24.0).max(1.0),
+                        height: lbox.height,
+                        content: display_text,
+                        font_size: 14.0,
+                        color: [15, 23, 42, 255],
+                    });
+                }
+            }
+            "NAV" => {
+                let color = ui
+                    .args
+                    .get(2)
+                    .and_then(|a| match a {
+                        UiArg::HexColor(c) => parse_hex_color(c),
+                        _ => None,
+                    })
+                    .unwrap_or([0.06, 0.09, 0.16, 1.0]);
+                list.push(RenderPrimitive::RoundedRect {
+                    node_id: id.clone(),
+                    x: lbox.x,
+                    y: lbox.y,
+                    width: lbox.width,
+                    height: lbox.height,
+                    radius: 0.0,
+                    color,
+                });
+            }
             _ => {}
         }
     }

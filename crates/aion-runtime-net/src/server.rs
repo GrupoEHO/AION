@@ -4,7 +4,7 @@ use std::sync::Arc;
 use aion_ast::{ApiNode, HttpMethod, MwNode, NodeId, NodeKind, Program, PropValue};
 use aion_ext::{ExtRegistry, ExtValue};
 use axum::body::Bytes;
-use axum::extract::State;
+use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, patch, post, put};
@@ -66,9 +66,14 @@ pub fn build_router(
     let mut router = Router::new().route("/__aion/schema.proto", get(serve_proto_schema));
 
     for (api_id, method, path) in routes {
-        let handler = move |state: State<AppState>, headers: HeaderMap, body: Bytes| {
+        let axum_path = normalize_axum_path(&path);
+        let handler = move |state: State<AppState>,
+                            params: Path<HashMap<String, String>>,
+                            query: Query<HashMap<String, String>>,
+                            headers: HeaderMap,
+                            body: Bytes| {
             let api_id = api_id.clone();
-            async move { handle_api_request(state, api_id, headers, body).await }
+            async move { handle_api_request(state, api_id, params.0, query.0, headers, body).await }
         };
 
         let method_router = match method {
@@ -78,7 +83,7 @@ pub fn build_router(
             HttpMethod::Patch => patch(handler),
             HttpMethod::Delete => delete(handler),
         };
-        router = router.route(&path, method_router);
+        router = router.route(&axum_path, method_router);
     }
 
     Ok(router.with_state(state))
@@ -126,9 +131,25 @@ async fn serve_proto_schema(State(state): State<AppState>) -> Response {
         .into_response()
 }
 
+/// Converts Gin-style `:id` route parameters to Axum 0.8 `{id}` syntax.
+fn normalize_axum_path(path: &str) -> String {
+    path.split('/')
+        .map(|seg| {
+            if let Some(name) = seg.strip_prefix(':') {
+                format!("{{{name}}}")
+            } else {
+                seg.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 async fn handle_api_request(
     State(state): State<AppState>,
     api_id: NodeId,
+    params: HashMap<String, String>,
+    query: HashMap<String, String>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
@@ -144,7 +165,7 @@ async fn handle_api_request(
         );
     };
 
-    let mut ctx = RequestContext::from_headers(&headers);
+    let mut ctx = RequestContext::from_request(&headers, params, query);
 
     // 1. Run `#MW` middleware pipeline.
     for mw_id in &api.middlewares {

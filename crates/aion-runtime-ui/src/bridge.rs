@@ -96,6 +96,7 @@ pub enum UiLifecycleEvent {
     LoadingFinished(NodeId),
     Toast(String),
     SignalUpdated { signal: NodeId, dirtied: Vec<NodeId> },
+    Navigated(NodeId),
 }
 
 /// Result of dispatching a UI event (`@tap`, etc.).
@@ -122,6 +123,7 @@ pub struct UiRuntime {
     pub default_headers: HashMap<String, String>,
     pub toasts: Vec<String>,
     pub loading_nodes: BTreeSet<NodeId>,
+    pub active_route: Option<NodeId>,
     pub events_log: Vec<UiLifecycleEvent>,
 }
 
@@ -141,8 +143,32 @@ impl UiRuntime {
             default_headers: HashMap::new(),
             toasts: Vec::new(),
             loading_nodes: BTreeSet::new(),
+            active_route: None,
             events_log: Vec::new(),
         })
+    }
+
+    /// Updates the `#S` signal bound to an `INP[..., #S_target]` widget.
+    pub fn input_change(&mut self, inp_node_id: &NodeId, text: impl Into<String>) -> Result<Vec<NodeId>, UiError> {
+        let bound_sig = match self.program.get(inp_node_id) {
+            Some(node) => match &node.kind {
+                NodeKind::Ui(ui) => ui.args.get(4).and_then(|a| match a {
+                    aion_ast::UiArg::NodeRef(id) => Some(id.clone()),
+                    _ => None,
+                }),
+                _ => None,
+            },
+            None => return Err(UiError::Bridge(format!("unknown UI node `{inp_node_id}`"))),
+        };
+        let Some(sig_id) = bound_sig else {
+            return Ok(Vec::new());
+        };
+        let dirtied = self.signals.set(&sig_id, SignalValue::Str(text.into()))?;
+        self.events_log.push(UiLifecycleEvent::SignalUpdated {
+            signal: sig_id,
+            dirtied: dirtied.clone(),
+        });
+        Ok(dirtied)
     }
 
     pub fn set_header(&mut self, name: impl Into<String>, value: impl Into<String>) {
@@ -295,6 +321,18 @@ impl UiRuntime {
                     signal: signal.clone(),
                     dirtied,
                 });
+                Ok(())
+            }
+            EventAction::Generic { name, args } if name == "NAV" => {
+                if let Some(Expr {
+                    kind: ExprKind::NodeRef(target),
+                    ..
+                }) = args.first()
+                {
+                    self.active_route = Some(target.clone());
+                    self.events_log
+                        .push(UiLifecycleEvent::Navigated(target.clone()));
+                }
                 Ok(())
             }
             EventAction::Generic { .. } | EventAction::Call { .. } => Ok(()),
