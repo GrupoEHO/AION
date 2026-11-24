@@ -6,11 +6,10 @@ members = [
     "crates/aion-ext",
     "crates/aion-checker",
     "crates/aion-runtime-net",
+    "crates/aion-runtime-ui",
     "crates/aion-cli",
     "plugins/aion-ext-firebase",
     "plugins/aion-ext-mongo",
-    # Deferred for Phase 2 (GPU/WASM/ARM64 UI engine):
-    # "crates/aion-runtime-ui",
 ]
 
 [workspace.package]

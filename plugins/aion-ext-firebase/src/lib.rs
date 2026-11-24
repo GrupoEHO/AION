@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 pub const GOOGLE_FIREBASE_JWKS_URL: &str =
     "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
 
-const MANIFEST_JSON: &str = include_str!("../../manifests/aion-firebase-auth-2.0.0.json");
+const MANIFEST_JSON: &str = include_str!("../../../manifests/aion-firebase-auth-2.0.0.json");
 const DEFAULT_CACHE_TTL: Duration = Duration::from_secs(3600);
 
 #[derive(Debug, Clone, Deserialize)]

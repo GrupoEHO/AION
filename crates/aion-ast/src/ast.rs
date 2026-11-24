@@ -34,7 +34,7 @@ impl fmt::Display for NodePrefix {
 }
 
 /// Canonical identifier for any flat node (e.g. `#CFG`, `#EXT:db`, `#SRV0`, `#API0`, `#N3`).
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct NodeId(pub String);
 
 impl NodeId {
@@ -222,7 +222,7 @@ impl HttpMethod {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "out_kind", rename_all = "snake_case")]
+#[serde(tag = "out_kind", content = "value", rename_all = "snake_case")]
 pub enum ApiOutput {
     ModelRef(NodeId),
     Fields(Vec<FieldDef>),
@@ -255,7 +255,7 @@ pub struct UiNode {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "arg_kind", rename_all = "snake_case")]
+#[serde(tag = "arg_kind", content = "value", rename_all = "snake_case")]
 pub enum UiArg {
     Int(i64),
     Float(f64),
@@ -267,7 +267,7 @@ pub enum UiArg {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "body_kind", rename_all = "snake_case")]
+#[serde(tag = "body_kind", content = "value", rename_all = "snake_case")]
 pub enum UiBody {
     Empty,
     Children(Vec<NodeId>),
@@ -331,7 +331,7 @@ pub enum Stmt {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "flow_kind", rename_all = "snake_case")]
+#[serde(tag = "flow_kind", content = "value", rename_all = "snake_case")]
 pub enum FlowControl {
     Next,
     Ret,
@@ -368,7 +368,7 @@ pub struct Expr {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "expr_kind", rename_all = "snake_case")]
+#[serde(tag = "expr_kind", content = "value", rename_all = "snake_case")]
 pub enum ExprKind {
     Int(i64),
     Float(f64),

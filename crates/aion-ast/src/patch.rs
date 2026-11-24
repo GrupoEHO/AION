@@ -25,7 +25,7 @@ pub enum PatchOp {
 
 /// Granular mutation payload for `PATCH` operations.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum PatchDelta {
     Replace(FlatNode),
     SetUiArgs { args: Vec<UiArg> },

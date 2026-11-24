@@ -1,0 +1,35 @@
+[package]
+name = "aion-runtime-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = ["gpu", "bridge"]
+gpu = ["dep:wgpu", "dep:cosmic-text", "dep:bytemuck", "dep:winit", "dep:pollster"]
+bridge = ["dep:aion-ext", "dep:aion-runtime-net", "dep:async-trait", "dep:reqwest"]
+
+[dependencies]
+aion-ast.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+taffy = "0.7"
+thiserror.workspace = true
+
+bytemuck = { version = "1", features = ["derive"], optional = true }
+cosmic-text = { version = "0.13", optional = true }
+pollster = { version = "0.4", optional = true }
+wgpu = { version = "24", optional = true }
+winit = { version = "0.30", optional = true }
+
+aion-ext = { path = "../aion-ext", optional = true }
+aion-runtime-net = { path = "../aion-runtime-net", optional = true }
+async-trait = { version = "0.1", optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
+
+[dev-dependencies]
+aion-parser.workspace = true
+axum = "0.8"
+http-body-util = "0.1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tower = { version = "0.5", features = ["util"] }

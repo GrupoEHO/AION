@@ -1,52 +1,110 @@
 use std::env;
 use std::fs;
-use std::path::Path;
+use std::io;
+use std::path::{Path, PathBuf};
 use std::process;
+use std::sync::Arc;
 
 use aion_ast::DiagnosticReport;
 use aion_checker::check_program;
-use aion_ext::ExtRegistry;
-use aion_parser::{parse_program, parse_to_json_report};
+use aion_cli::mcp::serve_mcp_stdio;
+use aion_cli::{build_registry, cmd_check, cmd_parse, cmd_patch};
+use aion_parser::parse_program;
+use aion_runtime_net::{serve, RuntimeConfig};
 
-fn main() {
-    let args: Vec<String> = env::args().collect();
-    if args.len() < 3 {
-        eprintln!("Usage: aion-cli <parse|check> <file.aion> [--manifests-dir <dir>]");
-        process::exit(2);
-    }
-
-    let cmd = args[1].as_str();
-    let file_path = Path::new(&args[2]);
-    let manifests_dir = args
-        .windows(2)
+fn find_manifests_dir(args: &[String]) -> PathBuf {
+    args.windows(2)
         .find(|w| w[0] == "--manifests-dir")
-        .map(|w| Path::new(&w[1]))
-        .unwrap_or_else(|| Path::new("manifests"));
+        .map(|w| PathBuf::from(&w[1]))
+        .unwrap_or_else(|| PathBuf::from("manifests"))
+}
 
-    let source = match fs::read_to_string(file_path) {
+fn read_file_or_exit(path: &Path) -> String {
+    match fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) => {
             eprintln!(
                 "{{\"ok\":false,\"error\":\"failed to read {}: {}\"}}",
-                file_path.display(),
+                path.display(),
                 e
             );
             process::exit(1);
         }
-    };
+    }
+}
+
+#[tokio::main]
+async fn main() {
+    let args: Vec<String> = env::args().collect();
+    if args.len() < 2 {
+        eprintln!(
+            "Usage:\n  aion parse <file.aion>\n  aion check <file.aion> [--manifests-dir <dir>]\n  aion patch <file.aion> <patch.json> [--manifests-dir <dir>]\n  aion run <file.aion> [--manifests-dir <dir>]\n  aion mcp [--manifests-dir <dir>]"
+        );
+        process::exit(2);
+    }
+
+    let cmd = args[1].as_str();
+    let manifests_dir = find_manifests_dir(&args);
 
     match cmd {
-        "parse" => match parse_to_json_report(&source) {
-            Ok(prog) => {
-                println!("{}", serde_json::to_string_pretty(&prog).unwrap());
+        "parse" => {
+            if args.len() < 3 {
+                eprintln!("Usage: aion parse <file.aion>");
+                process::exit(2);
             }
-            Err(json_err) => {
-                println!("{json_err}");
+            let src = read_file_or_exit(Path::new(&args[2]));
+            match cmd_parse(&src) {
+                Ok(json) => println!("{json}"),
+                Err(json_err) => {
+                    println!("{json_err}");
+                    process::exit(1);
+                }
+            }
+        }
+        "check" => {
+            if args.len() < 3 {
+                eprintln!("Usage: aion check <file.aion> [--manifests-dir <dir>]");
+                process::exit(2);
+            }
+            let src = read_file_or_exit(Path::new(&args[2]));
+            let reg = build_registry(Some(&manifests_dir)).unwrap_or_else(|e| {
+                eprintln!("{{\"ok\":false,\"error\":\"{e}\"}}");
+                process::exit(1);
+            });
+            let (ok, json) = cmd_check(&src, &reg);
+            println!("{json}");
+            if !ok {
                 process::exit(1);
             }
-        },
-        "check" => {
-            let prog = match parse_program(&source) {
+        }
+        "patch" => {
+            if args.len() < 4 {
+                eprintln!("Usage: aion patch <file.aion> <patch.json> [--manifests-dir <dir>]");
+                process::exit(2);
+            }
+            let src = read_file_or_exit(Path::new(&args[2]));
+            let patch_json = read_file_or_exit(Path::new(&args[3]));
+            let reg = build_registry(Some(&manifests_dir)).unwrap_or_else(|e| {
+                eprintln!("{{\"ok\":false,\"error\":\"{e}\"}}");
+                process::exit(1);
+            });
+            let (ok, out, _) = cmd_patch(&src, &patch_json, &reg);
+            println!("{out}");
+            if !ok {
+                process::exit(1);
+            }
+        }
+        "run" => {
+            if args.len() < 3 {
+                eprintln!("Usage: aion run <file.aion> [--manifests-dir <dir>]");
+                process::exit(2);
+            }
+            let src = read_file_or_exit(Path::new(&args[2]));
+            let reg = build_registry(Some(&manifests_dir)).unwrap_or_else(|e| {
+                eprintln!("{{\"ok\":false,\"error\":\"{e}\"}}");
+                process::exit(1);
+            });
+            let prog = match parse_program(&src) {
                 Ok(p) => p,
                 Err(diags) => {
                     let report = DiagnosticReport::from_diagnostics(diags);
@@ -54,32 +112,30 @@ fn main() {
                     process::exit(1);
                 }
             };
-            let mut reg = ExtRegistry::new();
-            if manifests_dir.is_dir() {
-                if let Ok(entries) = fs::read_dir(manifests_dir) {
-                    for entry in entries.flatten() {
-                        let p = entry.path();
-                        if p.extension().and_then(|e| e.to_str()) == Some("json") {
-                            if let Err(e) = reg.register_manifest_file(&p) {
-                                eprintln!(
-                                    "{{\"ok\":false,\"error\":\"manifest {}: {}\"}}",
-                                    p.display(),
-                                    e
-                                );
-                                process::exit(1);
-                            }
-                        }
-                    }
-                }
-            }
             let report = check_program(&prog, &reg);
-            println!("{}", report.to_json_pretty().unwrap());
             if !report.ok {
+                println!("{}", report.to_json_pretty().unwrap());
+                process::exit(1);
+            }
+            if let Err(e) = serve(prog, Arc::new(reg), RuntimeConfig::new()).await {
+                eprintln!("{{\"ok\":false,\"error\":\"{e}\"}}");
+                process::exit(1);
+            }
+        }
+        "mcp" => {
+            let reg = build_registry(Some(&manifests_dir)).unwrap_or_else(|e| {
+                eprintln!("{{\"ok\":false,\"error\":\"{e}\"}}");
+                process::exit(1);
+            });
+            let stdin = io::stdin();
+            let stdout = io::stdout();
+            if let Err(e) = serve_mcp_stdio(stdin.lock(), stdout.lock(), &reg) {
+                eprintln!("MCP stdio error: {e}");
                 process::exit(1);
             }
         }
         other => {
-            eprintln!("Unknown command `{other}`. Expected `parse` or `check`.");
+            eprintln!("Unknown command `{other}`. Expected: parse | check | patch | run | mcp");
             process::exit(2);
         }
     }

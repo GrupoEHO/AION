@@ -66,6 +66,7 @@ impl<'a> Checker<'a> {
         self.check_middlewares();
         self.check_apis();
         self.check_ui_nodes();
+        self.check_ui_layout();
     }
 
     fn collect_symbols(&mut self) {
@@ -1223,6 +1224,89 @@ impl<'a> Checker<'a> {
         let mut ret_ty = AionType::parse(&sig.ret).unwrap_or(AionType::Unknown);
         attach_ext_alias(&mut ret_ty, alias);
         ret_ty
+    }
+
+    fn check_ui_layout(&mut self) {
+        if self.uis.is_empty() {
+            return;
+        }
+        // Skip layout calculation if a UI cycle was already reported.
+        if self
+            .diagnostics
+            .iter()
+            .any(|d| d.code == "E_CIRCULAR_REF")
+        {
+            return;
+        }
+
+        let signals = aion_runtime_ui::SignalStore::from_program(self.program);
+        for viewport in [
+            aion_runtime_ui::Viewport::MOBILE,
+            aion_runtime_ui::Viewport::DESKTOP,
+        ] {
+            if let Ok(layout_tree) =
+                aion_runtime_ui::compute_layout(self.program, viewport, Some(&signals))
+            {
+                for issue in layout_tree.detect_overflows() {
+                    let span = self
+                        .uis
+                        .get(&issue.child_id)
+                        .map(|(_, s)| *s)
+                        .unwrap_or_default();
+                    let parent_desc = issue
+                        .parent_id
+                        .as_ref()
+                        .map(|p| format!("container `{p}`"))
+                        .unwrap_or_else(|| format!("viewport `{}`", issue.viewport_name));
+                    let fix_hint = match &issue.parent_id {
+                        Some(pid) => format!(
+                            "Reduce `{}` size (currently {:.0}x{:.0}px) to fit within {:.0}x{:.0}px on {} viewport, use percentage width, or add `scroll` to `{pid}`.",
+                            issue.child_id,
+                            issue.child_width,
+                            issue.child_height,
+                            issue.container_width,
+                            issue.container_height,
+                            issue.viewport_name
+                        ),
+                        None => format!(
+                            "Reduce `{}` size (currently {:.0}x{:.0}px) to fit within {:.0}x{:.0}px on {} viewport.",
+                            issue.child_id,
+                            issue.child_width,
+                            issue.child_height,
+                            issue.container_width,
+                            issue.container_height,
+                            issue.viewport_name
+                        ),
+                    };
+
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            "E_UI_OVERFLOW",
+                            Phase::Checker,
+                            format!(
+                                "UI node `{}` overflows {} ({}) on {} viewport ({:.0}x{:.0}px > {:.0}x{:.0}px)",
+                                issue.child_id,
+                                parent_desc,
+                                issue.axis,
+                                issue.viewport_name,
+                                issue.child_width,
+                                issue.child_height,
+                                issue.container_width,
+                                issue.container_height,
+                            ),
+                            span,
+                        )
+                        .with_node_id(issue.child_id.as_str())
+                        .with_expected(format!(
+                            "<= {:.0}x{:.0}px",
+                            issue.container_width, issue.container_height
+                        ))
+                        .with_found(format!("{:.0}x{:.0}px", issue.child_width, issue.child_height))
+                        .with_fix_hint(fix_hint),
+                    );
+                }
+            }
+        }
     }
 }
 

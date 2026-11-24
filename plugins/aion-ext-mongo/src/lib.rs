@@ -7,7 +7,7 @@ use mongodb::bson::{Binary, Bson, DateTime, Document};
 use mongodb::options::{ClientOptions, FindOneAndUpdateOptions, ReturnDocument};
 use mongodb::{Client, Database};
 
-const MANIFEST_JSON: &str = include_str!("../../manifests/aion-mongo-1.2.0.json");
+const MANIFEST_JSON: &str = include_str!("../../../manifests/aion-mongo-1.2.0.json");
 
 struct ConnectedMongo {
     client: Client,
@@ -233,12 +233,15 @@ fn expect_str<'a>(val: &'a ExtValue, name: &str) -> Result<&'a str, String> {
 }
 
 fn map_mongo_err(err: mongodb::error::Error) -> String {
-    if err.is_network_timeout() {
-        "timeout".to_string()
-    } else if err.is_network_error() {
-        "connection_failed".to_string()
-    } else {
-        "invalid_query".to_string()
+    use mongodb::error::ErrorKind;
+    match err.kind.as_ref() {
+        ErrorKind::Io(io_err) if io_err.kind() == std::io::ErrorKind::TimedOut => {
+            "timeout".to_string()
+        }
+        ErrorKind::Io(_)
+        | ErrorKind::ServerSelection { .. }
+        | ErrorKind::ConnectionPoolCleared { .. } => "connection_failed".to_string(),
+        _ => "invalid_query".to_string(),
     }
 }
 

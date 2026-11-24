@@ -178,4 +178,24 @@ mod tests {
         assert!(!mismatch_report.ok);
         assert_eq!(mismatch_report.diagnostics[0].code, "E_TYPE_MISMATCH");
     }
+
+    #[test]
+    fn emits_json_error_e_ui_overflow_for_500px_button_on_mobile() {
+        let src = r#"
+#N0:ROOT[0,0,100%,100%,#F8FAFC]{#N1}
+#N1:FLEX[v,c,c,16]{#N2}
+#N2:BTN[500,48,8,#2563EB]{}
+"#;
+        let prog = parse_program(src).expect("should parse");
+        let reg = mock_registry();
+        let json_err = check_to_json_report(&prog, &reg).unwrap_err();
+        let val: serde_json::Value = serde_json::from_str(&json_err).unwrap();
+
+        assert_eq!(val["ok"], false);
+        let diag = &val["diagnostics"][0];
+        assert_eq!(diag["code"], "E_UI_OVERFLOW");
+        assert_eq!(diag["node_id"], "#N2");
+        assert!(diag["message"].as_str().unwrap().contains("mobile"));
+        assert!(diag["fix_hint"].as_str().unwrap().contains("390"));
+    }
 }

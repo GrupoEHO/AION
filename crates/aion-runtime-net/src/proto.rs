@@ -163,6 +163,37 @@ impl ProtoSchema {
         }
     }
 
+    pub fn encode_input(
+        &self,
+        api_id: &NodeId,
+        val: &ExtValue,
+    ) -> Result<Vec<u8>, RuntimeNetError> {
+        let Some(full_name) = self.api_in_msg.get(api_id) else {
+            return Ok(Vec::new());
+        };
+        let desc = self.message_descriptor(full_name).ok_or_else(|| {
+            RuntimeNetError::Proto(format!("missing descriptor for `{full_name}`"))
+        })?;
+        let msg = ext_value_to_dynamic_msg(&desc, val)?;
+        Ok(msg.encode_to_vec())
+    }
+
+    pub fn decode_output(
+        &self,
+        api_id: &NodeId,
+        bytes: &[u8],
+    ) -> Result<ExtValue, RuntimeNetError> {
+        let Some(full_name) = self.api_out_msg.get(api_id) else {
+            return Ok(ExtValue::Void);
+        };
+        let desc = self.message_descriptor(full_name).ok_or_else(|| {
+            RuntimeNetError::Proto(format!("missing descriptor for `{full_name}`"))
+        })?;
+        let msg = DynamicMessage::decode(desc, bytes)
+            .map_err(|e| RuntimeNetError::Proto(format!("protobuf decode error: {e}")))?;
+        Ok(dynamic_msg_to_ext_value(&msg))
+    }
+
     pub fn encode_output(
         &self,
         api_id: &NodeId,
