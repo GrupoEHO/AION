@@ -110,12 +110,12 @@ const WEB_SHELL_HTML: &str = r#"<!doctype html>
       return null;
     }
 
-    async function handleNodeClick(node) {
-      const tap = (node.events || []).find(e => e.event === 'tap');
+    async function handleNodeClick(ui) {
+      const tap = (ui.events || []).find(e => e.event === 'tap');
       if (!tap) return;
       const act = tap.action;
       if (act.action_kind === 'call') {
-        const apiNode = bundle.program.nodes.find(n => n.id === act.api);
+        const apiNode = bundle.program.nodes.find(n => n.id === act.api)?.kind;
         if (!apiNode) return;
         const payload = evalExpr(act.payload, null) || {};
         try {
@@ -133,7 +133,7 @@ const WEB_SHELL_HTML: &str = r#"<!doctype html>
           }
           showToast('Respuesta OK de ' + act.api);
         } catch (err) {
-          const errHandler = (node.events || []).find(e => e.event === 'err');
+          const errHandler = (ui.events || []).find(e => e.event === 'err');
           if (errHandler && errHandler.action.action_kind === 'toast') {
             showToast(evalExpr(errHandler.action.message, null) || String(err));
           } else {
@@ -158,32 +158,32 @@ const WEB_SHELL_HTML: &str = r#"<!doctype html>
       stage.innerHTML = '';
 
       const nodeMap = {};
-      for (const n of bundle.program.nodes) nodeMap[n.id] = n;
+      for (const n of bundle.program.nodes) nodeMap[n.id] = n.kind;
 
       for (const id of bundle.layout.paint_order) {
         const box = bundle.layout.boxes[id];
-        const node = nodeMap[id];
-        if (!box || !node || node.node_type !== 'ui') continue;
+        const ui = nodeMap[id];
+        if (!box || !ui || ui.node_type !== 'ui') continue;
 
         let el;
-        if (node.widget === 'BTN') {
+        if (ui.widget === 'BTN') {
           el = document.createElement('button');
           el.className = 'aion-node aion-btn';
-          const radius = node.args[2]?.value ?? 6;
-          const bg = node.args[3]?.value ?? '#2563EB';
+          const radius = ui.args[2]?.value ?? 6;
+          const bg = ui.args[3]?.value ?? '#2563EB';
           el.style.borderRadius = radius + 'px';
           el.style.background = bg;
-          el.onclick = () => handleNodeClick(node);
-        } else if (node.widget === 'INP') {
+          el.onclick = () => handleNodeClick(ui);
+        } else if (ui.widget === 'INP') {
           el = document.createElement('input');
           el.className = 'aion-node aion-inp';
           el.type = 'text';
-          const radius = node.args[2]?.value ?? 6;
-          const bg = node.args[3]?.value ?? '#FFFFFF';
-          const boundSig = node.args[4]?.value;
+          const radius = ui.args[2]?.value ?? 6;
+          const bg = ui.args[3]?.value ?? '#FFFFFF';
+          const boundSig = ui.args[4]?.value;
           el.style.borderRadius = radius + 'px';
           el.style.background = bg;
-          if (node.body?.body_kind === 'text') el.placeholder = node.body.value.template;
+          if (ui.body?.body_kind === 'text') el.placeholder = ui.body.value.template;
           if (boundSig) {
             el.value = signals[boundSig] ?? '';
             el.addEventListener('input', e => {
@@ -191,22 +191,22 @@ const WEB_SHELL_HTML: &str = r#"<!doctype html>
               updateSignalsUI();
             });
           }
-        } else if (node.widget === 'TXT') {
+        } else if (ui.widget === 'TXT') {
           el = document.createElement('span');
           el.className = 'aion-node aion-txt';
-          el.style.fontSize = (node.args[0]?.value ?? 16) + 'px';
-          el.style.fontWeight = String(node.args[1]?.value ?? 400);
-          el.style.color = node.args[2]?.value ?? '#0F172A';
-          if (node.body?.body_kind === 'text') {
-            el.dataset.template = node.body.value.template;
-            el.textContent = resolveText(node.body.value.template);
+          el.style.fontSize = (ui.args[0]?.value ?? 16) + 'px';
+          el.style.fontWeight = String(ui.args[1]?.value ?? 400);
+          el.style.color = ui.args[2]?.value ?? '#0F172A';
+          if (ui.body?.body_kind === 'text') {
+            el.dataset.template = ui.body.value.template;
+            el.textContent = resolveText(ui.body.value.template);
           }
         } else {
           el = document.createElement('div');
           el.className = 'aion-node';
-          if (node.widget === 'ROOT' && node.args[4]?.value) el.style.background = node.args[4].value;
-          if (node.widget === 'NAV' && node.args[2]?.value) el.style.background = node.args[2].value;
-          if (node.widget === 'LIST') el.style.overflow = 'auto';
+          if (ui.widget === 'ROOT' && ui.args[4]?.value) el.style.background = ui.args[4].value;
+          if (ui.widget === 'NAV' && ui.args[2]?.value) el.style.background = ui.args[2].value;
+          if (ui.widget === 'LIST') el.style.overflow = 'auto';
         }
 
         el.style.left = box.x + 'px';
