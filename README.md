@@ -1,3 +1,5 @@
+> **Idioma:** [English](./README.en.md) | **Español**
+
 # AION (AI-Oriented Native Full-Stack Language)
 
 ## ¿Qué es AION?
