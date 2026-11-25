@@ -22,19 +22,22 @@
 
 ---
 
-## Guía de Instalación en un Nuevo Dispositivo (macOS / Linux)
+## Guía de Instalación en un Nuevo Dispositivo (macOS / Linux / Windows)
 
 Para que **AION** quede instalado globalmente en tu máquina (como Rust o Go) y cualquier agente de **Antigravity** lo reconozca desde cualquier carpeta, necesitas 3 cosas:
-1. El binario `aion` en tu `$PATH`.
-2. El **Skill global** `aion-language` en `~/.gemini/config/skills/aion-language/SKILL.md`.
-3. El **servidor MCP global** en `~/.gemini/config/mcp_config.json`.
+1. El binario `aion` (`aion.exe` en Windows) en tu `PATH`.
+2. El **Skill global** `aion-language` en `~/.gemini/config/skills/aion-language/SKILL.md` (`%USERPROFILE%\.gemini\config\skills\aion-language\SKILL.md` en Windows).
+3. El **servidor MCP global** en `~/.gemini/config/mcp_config.json` (`%USERPROFILE%\.gemini\config\mcp_config.json` en Windows).
 
 ### Requisitos Previos
-- **Rust y Cargo** (`brew install rust` en macOS, o `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`).
-- **Python 3** (solo para el script automático `install.sh`).
+- **Rust y Cargo:**
+  - macOS: `brew install rust` o [rustup.rs](https://rustup.rs)
+  - Windows: [rustup-init.exe](https://rustup.rs) (incluye `cargo` y `rustc`; requiere Visual Studio Build Tools C++)
+- **Python 3** (solo para `install.sh` en macOS/Linux; `install.ps1` en Windows usa PowerShell nativo y no necesita Python).
 
 ### Opción A: Instalación Automática (1 comando)
 
+**macOS / Linux:**
 ```bash
 git clone https://github.com/GrupoEHO/AION.git
 cd AION
@@ -42,7 +45,14 @@ chmod +x install.sh
 ./install.sh
 ```
 
-El script compila `aion` en modo `release`, lo enlaza en `/opt/homebrew/bin/aion` (o `/usr/local/bin/aion` / `~/.local/bin/aion`), copia el skill global a `~/.gemini/config/skills/aion-language/SKILL.md` y registra el servidor MCP `aion` en `~/.gemini/config/mcp_config.json` sin borrar otros servidores existentes.
+**Windows (PowerShell):**
+```powershell
+git clone https://github.com/GrupoEHO/AION.git
+cd AION
+powershell -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+El instalador compila `aion` en modo `release`, lo agrega a tu `PATH` de usuario (`%USERPROFILE%\.aion\bin\aion.exe` en Windows; `/opt/homebrew/bin/aion` o `/usr/local/bin/aion` en macOS/Linux), instala el skill global `aion-language` y registra el servidor MCP `aion` en `mcp_config.json` sin borrar otros servidores existentes.
 
 ---
 
