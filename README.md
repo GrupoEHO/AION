@@ -1,6 +1,46 @@
 # AION (AI-Oriented Native Full-Stack Language)
 
-**AION** es un lenguaje de programación full-stack con compilador y runtimes escritos en **Rust**, diseñado específicamente para ser escrito, parcheado y verificado por **agentes de IA (LLMs)** con cero anidamiento (*flat graph*), contratos unificados Protobuf (`#M`), módulos externos verificados por ABI (`#EXT`), layout Flexbox determinístico (`taffy`) y diagnóstico JSON con sugerencias de parche (`fix_hint`).
+## ¿Qué es AION?
+
+**AION** es un lenguaje de programación full-stack nativo —con compilador, verificador estático, runtimes de backend/UI y servidor MCP escritos en **Rust**— diseñado **exclusivamente para ser escrito, parcheado y mantenido por agentes de IA (LLMs)**.
+
+En AION, un solo archivo `.aion` describe el backend (servidor HTTP/Protobuf, middlewares, modelos de datos, endpoints e integraciones externas) y el frontend reactivo (estado `Signals` y árbol de interfaz) usando un **grafo plano de nodos** (`#CFG`, `#EXT`, `#SRV`, `#MW`, `#M`, `#API`, `#S`, `#N`).
+
+---
+
+## ¿Por qué se hace AION?
+
+Los stacks tradicionales (por ejemplo, **Flutter + Go** o **React + Node**) fueron diseñados para humanos, pero introducen fricción constante cuando el desarrollo es liderado por agentes de IA:
+
+1. **Anidamiento profundo vs. Grafo Plano:** En UIs declarativas tradicionales, modificar un botón implica reescribir bloques profundamente anidados donde los LLMs pierden contexto o rompen llaves/paréntesis. En AION **no existe el anidamiento**: cada elemento es un nodo plano identificado por `#ID` que puede modificarse con parches diferenciales atómicos (`ADD`, `PATCH`, `DEL`).
+2. **Deriva entre Backend y Frontend:** Mantener structs en Go, archivos `.proto` y modelos en Dart duplica esfuerzo y genera incompatibilidades. En AION, un nodo `#M` es la **única fuente de verdad** para backend, Protobuf y frontend.
+3. **Alucinaciones de librerías externas:** Los LLMs suelen inventar métodos o firmas inexistentes de SDKs de terceros. En AION, las integraciones (`MongoDB`, `Firebase Auth`, etc.) viven desacopladas como módulos `#EXT` con un **manifiesto de contrato ABI v1**; el compilador rechaza cualquier llamada inválida devolviendo la firma exacta esperada en JSON.
+4. **Errores silenciosos y layouts rotos:** AION obliga en tiempo de compilación a declarar manejadores `@err` en toda llamada `#API` desde la UI y calcula el layout Flexbox con `taffy` antes de ejecutar para detectar desbordamientos (`E_UI_OVERFLOW`) en móvil (`390×844`) y desktop (`1440×900`).
+5. **Compilador orientado a agentes:** Todo error léxico, de sintaxis, tipos, contratos `#EXT` o layout se emite en **JSON estructurado** con `fix_hint` accionable para que el agente se autocorrija en un ciclo cerrado vía MCP.
+
+---
+
+## ¿Cuál es su intención?
+
+El objetivo de AION es convertirse en una **plataforma full-stack de alto rendimiento gobernada por agentes de IA**, capaz de:
+- Sustituir progresivamente stacks multiproyecto complejos (como aplicaciones empresariales en producción de cientos de miles de líneas en **Flutter + Go**) mediante migraciones incrementales por *vertical slices*.
+- Reducir drásticamente el consumo de tokens, el *boilerplate* (proyectos canónicos de 3 archivos: `aion.toml`, `app.aion`, `AGENTS.md`) y los errores en producción gracias a verificación estática estricta.
+- Permitir que cualquier agente (en Antigravity u otro cliente MCP) cree, valide, parche y pruebe aplicaciones completas de punta a punta de forma autónoma.
+
+---
+
+## ¿Dónde está parado hoy? (Estado Actual — v0.1 MVP)
+
+Los **6 hitos fundacionales** definidos en [roadmap.md](./roadmap.md) están completados y verificados con `30/30` pruebas automatizadas:
+
+| Área | Estado Actual (v0.1) | Próxima Evolución (Fase 2 / Producción) |
+| :--- | :--- | :--- |
+| **Lenguaje, Parser y AST** | Completo (`aion-ast`, `aion-parser` con `chumsky`, parches transaccionales `ADD`/`PATCH`/`DEL`). | *Unparser* canónico (`AST -> .aion`) para escritura directa en disco desde `aion patch --write`. |
+| **Verificador (`aion-checker`)** | Tipos, ciclos (`E_CIRCULAR_REF`), contratos `#EXT`, `@err` obligatorio y *overflow* visual (`E_UI_OVERFLOW`). | Validaciones avanzadas de seguridad/permisos (`caps`), flujos condicionales y análisis de rutas. |
+| **Backend (`aion-runtime-net`)** | Servidor HTTP `axum` + `tokio`, middlewares `#MW`, parámetros `:id`/query, Protobuf binario dinámico (`prost-reflect`), fallback JSON y `/__aion/schema.proto`. | WebSockets/SSE, observabilidad/métricas y empaquetado de despliegue optimizado. |
+| **Plugins `#EXT`** | ABI v1 + generador WIT + plugins reales `aion-ext-mongo` y `aion-ext-firebase`. | Carga dinámica de módulos WebAssembly Components (`.wasm` / WIT) y más conectores (GCS, PDF, CFDI/SAT, pagos, cron). |
+| **UI (`aion-runtime-ui`)** | Motor reactivo `Signals`, layout `taffy` (`ROOT`, `FLEX`, `NAV`, `LIST`, `TXT`, `INP`, `BTN`), puente `CALL(#API...)`, base `wgpu` + `cosmic-text` y preview web en vivo (`aion web`). | Loop interactivo nativo GPU completo, compilación directa a `wasm32-unknown-unknown` (WebGPU/WebGL) y targets ARM64 (Android/iOS). |
+| **CLI y MCP (`aion-cli`)** | Binario global `aion` (`create`, `parse`, `check`, `patch`, `web`, `run`, `mcp`), 6 herramientas MCP sobre `stdio` y Skill global `aion-language`. | `aion build --target web\|android\|ios`, *hot-reload* y herramientas de migración asistida. |
 
 ---
 
