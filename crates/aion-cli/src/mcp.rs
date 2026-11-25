@@ -215,6 +215,14 @@ fn tool_definitions() -> Value {
                     "dir": { "type": "string", "description": "Optional parent directory path (defaults to current working directory)." }
                 }
             }
+        },
+        {
+            "name": "aion_spec",
+            "description": "Return the concise AION language grammar, node syntax (#CFG/#EXT/#SRV/#MW/#M/#API/#S/#N), widgets (ROOT/FLEX/NAV/LIST/TXT/INP/BTN), and a full valid example.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {}
+            }
         }
     ])
 }
@@ -373,6 +381,41 @@ fn call_tool(
                 Err(err) => Ok((json!({ "ok": false, "error": err }), true)),
             }
         }
+        "aion_spec" => Ok((
+            json!({
+                "ok": true,
+                "language": "AION",
+                "version": env!("CARGO_PKG_VERSION"),
+                "types": ["i32", "f64", "str", "bool", "bytes", "ts", "list<T>", "map<K,V>", "void", "any", "#M<id>", "@ExtType"],
+                "nodes": {
+                    "#CFG": "#CFG:ENV{VAR1, VAR2}",
+                    "#EXT": "#EXT:alias = \"org/pkg@ver\"",
+                    "#SRV": "#SRV0:HTTP[port:8080, proto:on]",
+                    "#MW": "#MW0:PIPE(ctx) { let tok = ctx.hdr(\"Authorization\") ... -> NEXT }",
+                    "#M": "#M0:ModelName{field:type, ...}",
+                    "#API": "#API0:#SRV0.POST[\"/v1/path\", #MW0] IN{x:i32} OUT{#M0} { ... -> RET }",
+                    "#S": "#S0:i32=0",
+                    "#N": "#N0:WIDGET[positional_args]{#N1} @tap->CALL(#API0,{...})=>#S0=res.field @err->TOAST(\"Error\")"
+                },
+                "ctx_methods": ["ctx.hdr(name)", "ctx.get(key)", "ctx.set(key, val)", "ctx.param(name)", "ctx.query(name)"],
+                "widgets": {
+                    "ROOT": "ROOT[pad_x, pad_y, 100%, 100%, #BG_HEX]{#N1}",
+                    "FLEX": "FLEX[v|h, c|s|e|sb|sa, c|s|e|st, gap, scroll?]{#N2,#N3}",
+                    "NAV": "NAV[100%, 56, #BG_HEX]{#N_tab1}",
+                    "LIST": "LIST[v|h, gap, noscroll?]{#N_item}",
+                    "TXT": "TXT[font_size, weight, #COLOR_HEX]{\"Text {#S0}\"}",
+                    "INP": "INP[width, height, radius, #BG_HEX, #S_bound]{\"Placeholder\"}",
+                    "BTN": "BTN[width, height, radius, #BG_HEX]{#N_lbl} @tap->CALL(#API0,{...})=>#S0=res.f @err->TOAST(\"Error\")"
+                },
+                "rules": [
+                    "Flat graph only (zero nesting).",
+                    "Every #N node with CALL(#API...) MUST declare an @err handler.",
+                    "UI must fit mobile (390x844) and desktop (1440x900) without E_UI_OVERFLOW.",
+                    "Call aion_inspect_ext before using any #EXT method."
+                ]
+            }),
+            false,
+        )),
         other => Err(format!("unknown tool `{other}`")),
     }
 }

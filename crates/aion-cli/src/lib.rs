@@ -367,7 +367,8 @@ mod tests {
                 "aion_patch",
                 "aion_inspect_ext",
                 "aion_layout_tree",
-                "aion_create"
+                "aion_create",
+                "aion_spec"
             ]
         );
 
