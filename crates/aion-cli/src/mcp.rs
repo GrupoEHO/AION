@@ -223,6 +223,25 @@ fn tool_definitions() -> Value {
                 "type": "object",
                 "properties": {}
             }
+        },
+        {
+            "name": "aion_build_android",
+            "description": "Validate an AION program and compile it into an Android App Bundle (.aab) via Gradle.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["source"],
+                "properties": {
+                    "source": { "type": "string", "description": "AION source code." },
+                    "app_id": { "type": "string", "default": "com.aion.app" },
+                    "app_name": { "type": "string", "default": "AION App" },
+                    "version_code": { "type": "integer", "default": 1 },
+                    "version_name": { "type": "string", "default": "0.1.0" },
+                    "api_base_url": { "type": "string" },
+                    "out_dir": { "type": "string", "default": "build/android" },
+                    "debug": { "type": "boolean", "default": false },
+                    "generate_only": { "type": "boolean", "default": false }
+                }
+            }
         }
     ])
 }
@@ -416,6 +435,51 @@ fn call_tool(
             }),
             false,
         )),
+        "aion_build_android" => {
+            let source = args
+                .get("source")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "missing required string argument `source`".to_string())?;
+            let prog = match parse_program(source) {
+                Ok(p) => p,
+                Err(diags) => {
+                    let report = DiagnosticReport::from_diagnostics(diags);
+                    return Ok((serde_json::to_value(report).unwrap(), true));
+                }
+            };
+            let report = check_program(&prog, registry);
+            if !report.ok {
+                return Ok((serde_json::to_value(report).unwrap(), true));
+            }
+            let mut opts = crate::android::AndroidBuildOptions::default();
+            if let Some(v) = args.get("app_id").and_then(Value::as_str) {
+                opts.app_id = v.to_string();
+            }
+            if let Some(v) = args.get("app_name").and_then(Value::as_str) {
+                opts.app_name = v.to_string();
+            }
+            if let Some(v) = args.get("version_code").and_then(Value::as_u64) {
+                opts.version_code = v as u32;
+            }
+            if let Some(v) = args.get("version_name").and_then(Value::as_str) {
+                opts.version_name = v.to_string();
+            }
+            if let Some(v) = args.get("api_base_url").and_then(Value::as_str) {
+                opts.api_base_url = Some(v.to_string());
+            }
+            if let Some(v) = args.get("out_dir").and_then(Value::as_str) {
+                opts.out_dir = std::path::PathBuf::from(v);
+            }
+            opts.debug = args.get("debug").and_then(Value::as_bool).unwrap_or(false);
+            opts.generate_only = args
+                .get("generate_only")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            match crate::android::build_android_aab(&prog, &opts) {
+                Ok(res) => Ok((serde_json::to_value(res).unwrap(), false)),
+                Err(err) => Ok((json!({ "ok": false, "error": err }), true)),
+            }
+        }
         other => Err(format!("unknown tool `{other}`")),
     }
 }

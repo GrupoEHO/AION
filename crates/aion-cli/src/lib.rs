@@ -1,3 +1,4 @@
+pub mod android;
 pub mod mcp;
 pub mod web;
 
@@ -368,7 +369,8 @@ mod tests {
                 "aion_inspect_ext",
                 "aion_layout_tree",
                 "aion_create",
-                "aion_spec"
+                "aion_spec",
+                "aion_build_android"
             ]
         );
 
@@ -410,6 +412,31 @@ mod tests {
         assert!(ok, "starter app.aion must pass aion check: {report_json}");
         assert!(tmp.join("xion/aion.toml").is_file());
         assert!(tmp.join("xion/AGENTS.md").is_file());
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn android_generate_only_scaffolds_valid_gradle_project() {
+        let prog = parse_program(EXAMPLE_AION).unwrap();
+        let tmp = std::env::temp_dir().join(format!("aion_android_gen_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+
+        let mut opts = crate::android::AndroidBuildOptions::default();
+        opts.app_id = "com.grupoeho.nidox".to_string();
+        opts.app_name = "Nidox".to_string();
+        opts.out_dir = tmp.clone();
+        opts.generate_only = true;
+
+        let res = crate::android::build_android_aab(&prog, &opts).unwrap();
+        assert!(res.ok);
+        assert!(tmp.join("settings.gradle.kts").is_file());
+        assert!(tmp.join("app/build.gradle.kts").is_file());
+        assert!(tmp.join("app/src/main/AndroidManifest.xml").is_file());
+        assert!(tmp.join("app/src/main/assets/aion_bundle.json").is_file());
+        assert!(tmp
+            .join("app/src/main/java/com/grupoeho/nidox/MainActivity.java")
+            .is_file());
 
         let _ = fs::remove_dir_all(&tmp);
     }

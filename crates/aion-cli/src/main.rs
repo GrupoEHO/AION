@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use aion_ast::DiagnosticReport;
 use aion_checker::check_program;
+use aion_cli::android::{build_android_aab, AndroidBuildOptions};
 use aion_cli::mcp::serve_mcp_stdio;
 use aion_cli::web::serve_web;
 use aion_cli::{build_registry, cmd_check, cmd_create, cmd_parse, cmd_patch};
@@ -18,6 +19,12 @@ fn find_manifests_dir(args: &[String]) -> PathBuf {
         .find(|w| w[0] == "--manifests-dir")
         .map(|w| PathBuf::from(&w[1]))
         .unwrap_or_else(|| PathBuf::from("manifests"))
+}
+
+fn find_flag(args: &[String], flag: &str) -> Option<String> {
+    args.windows(2)
+        .find(|w| w[0] == flag)
+        .map(|w| w[1].clone())
 }
 
 fn read_file_or_exit(path: &Path) -> String {
@@ -38,7 +45,7 @@ fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
         eprintln!(
-            "Usage:\n  aion create <name> [dir]\n  aion parse <file.aion>\n  aion check <file.aion> [--manifests-dir <dir>]\n  aion patch <file.aion> <patch.json> [--manifests-dir <dir>]\n  aion run <file.aion> [--manifests-dir <dir>]\n  aion web <file.aion> [--manifests-dir <dir>]\n  aion mcp [--manifests-dir <dir>]"
+            "Usage:\n  aion create <name> [dir]\n  aion parse <file.aion>\n  aion check <file.aion> [--manifests-dir <dir>]\n  aion patch <file.aion> <patch.json> [--manifests-dir <dir>]\n  aion build android <file.aion> [--app-id <id>] [--name <name>] [--version-code <n>] [--version-name <ver>] [--api-base-url <url>] [--out <dir>] [--debug] [--generate-only]\n  aion run <file.aion> [--manifests-dir <dir>]\n  aion web <file.aion> [--manifests-dir <dir>]\n  aion mcp [--manifests-dir <dir>]"
         );
         process::exit(2);
     }
@@ -109,6 +116,80 @@ fn main() {
             println!("{out}");
             if !ok {
                 process::exit(1);
+            }
+        }
+        "build" => {
+            if args.len() < 4 || args[2] != "android" {
+                eprintln!("Usage: aion build android <file.aion> [--app-id com.aion.app] [--name \"App\"] [--version-code 1] [--version-name 0.1.0] [--api-base-url http://10.0.2.2:8080] [--out build/android] [--debug] [--generate-only]");
+                process::exit(2);
+            }
+            let file_path = Path::new(&args[3]);
+            let src = read_file_or_exit(file_path);
+            let reg = build_registry(Some(&manifests_dir)).unwrap_or_else(|e| {
+                eprintln!("{{\"ok\":false,\"error\":\"{e}\"}}");
+                process::exit(1);
+            });
+            let prog = match parse_program(&src) {
+                Ok(p) => p,
+                Err(diags) => {
+                    let report = DiagnosticReport::from_diagnostics(diags);
+                    println!("{}", report.to_json_pretty().unwrap());
+                    process::exit(1);
+                }
+            };
+            let report = check_program(&prog, &reg);
+            if !report.ok {
+                println!("{}", report.to_json_pretty().unwrap());
+                process::exit(1);
+            }
+
+            let mut opts = AndroidBuildOptions::default();
+            if let Some(v) = find_flag(&args, "--app-id") {
+                opts.app_id = v;
+            }
+            if let Some(v) = find_flag(&args, "--name") {
+                opts.app_name = v;
+            }
+            if let Some(v) = find_flag(&args, "--version-code") {
+                opts.version_code = v.parse().unwrap_or(1);
+            }
+            if let Some(v) = find_flag(&args, "--version-name") {
+                opts.version_name = v;
+            }
+            if let Some(v) = find_flag(&args, "--api-base-url") {
+                opts.api_base_url = Some(v);
+            }
+            if let Some(v) = find_flag(&args, "--out") {
+                opts.out_dir = PathBuf::from(v);
+            }
+            if let Some(v) = find_flag(&args, "--keystore") {
+                opts.keystore = Some(PathBuf::from(v));
+            }
+            if let Some(v) = find_flag(&args, "--keystore-pass") {
+                opts.keystore_pass = Some(v);
+            }
+            if let Some(v) = find_flag(&args, "--key-alias") {
+                opts.key_alias = Some(v);
+            }
+            if let Some(v) = find_flag(&args, "--key-pass") {
+                opts.key_pass = Some(v);
+            }
+            opts.debug = args.iter().any(|a| a == "--debug");
+            opts.generate_only = args.iter().any(|a| a == "--generate-only");
+
+            match build_android_aab(&prog, &opts) {
+                Ok(res) => println!("{}", serde_json::to_string_pretty(&res).unwrap()),
+                Err(err) => {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": false,
+                            "error": err
+                        }))
+                        .unwrap()
+                    );
+                    process::exit(1);
+                }
             }
         }
         "run" => {

@@ -25,6 +25,7 @@ description: >-
   - `aion parse <file.aion>` — Outputs flat AST JSON.
   - `aion patch <file.aion> <patch.json>` — Applies transactional `ADD`/`PATCH`/`DEL` AST patches and validates.
   - `aion web <file.aion>` — Runs live HTTP/Protobuf backend + interactive Web Preview at `http://127.0.0.1:8080`.
+  - `aion build android <file.aion> [--app-id com.aion.app] [--name "App"] [--out build/android]` — Validates and compiles a native Android App Bundle (`.aab`) via Gradle.
   - `aion run <file.aion>` — Runs production `axum` + Protobuf backend server.
 - **MCP Tools (`aion` server):**
   - `aion_create`: Scaffold a new AION project (`{ name, dir? }`).
@@ -33,6 +34,7 @@ description: >-
   - `aion_patch`: Transactional AST patching + validation (`{ source, patches }`).
   - `aion_layout_tree`: Compute Taffy layout boxes & detect overflows (`{ source, viewport?: "mobile" | "desktop" }`).
   - `aion_spec`: Returns the concise AION grammar and examples.
+  - `aion_build_android`: Compiles an AION program into an Android App Bundle (`.aab`).
 
 ## 3. Primitive & Composite Types
 - Primitives: `i32`, `f64`, `str`, `bool`, `bytes`, `ts`, `void`, `any`

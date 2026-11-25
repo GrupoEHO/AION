@@ -180,6 +180,9 @@ aion patch app.aion patch.json
 # Levantar demo web interactiva + backend HTTP/Protobuf en http://127.0.0.1:8080
 aion web examples/promg_web_demo.aion
 
+# Compilar un Android App Bundle (.aab) listo para Google Play
+aion build android examples/promg_web_demo.aion --app-id com.miempresa.app --name "Mi App"
+
 # Levantar solo el servidor HTTP/Protobuf de producción
 aion run app.aion
 
