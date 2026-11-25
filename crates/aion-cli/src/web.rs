@@ -1,35 +1,46 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::fs;
+use std::path::PathBuf;
+use std::sync::{Arc, RwLock};
+use std::time::{Duration, SystemTime};
 
-use aion_ast::{NodeKind, Program, PropValue};
+use aion_ast::{DiagnosticReport, NodeKind, Program, PropValue};
+use aion_checker::check_program;
 use aion_ext::ExtRegistry;
+use aion_parser::parse_program;
 use aion_runtime_net::{build_router, generate_proto3, RuntimeConfig};
 use aion_runtime_ui::{compute_layout, SignalStore, Viewport};
-use axum::extract::{Query, State};
+use axum::body::Body;
+use axum::extract::{Query, Request, State};
 use axum::http::{header, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::Router;
 use serde_json::json;
+use tokio::sync::broadcast;
+use tower::ServiceExt;
 
 const WEB_SHELL_HTML: &str = r#"<!doctype html>
 <html lang="es">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>AION Web Runtime Preview</title>
+  <title>AION Web Runtime · Hot Reload</title>
   <style>
     :root { color-scheme: dark; }
     * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
     body { margin: 0; background: #0B1120; color: #E2E8F0; display: grid; grid-template-columns: 1fr 380px; min-height: 100vh; }
     @media (max-width: 960px) { body { grid-template-columns: 1fr; } }
     main { display: flex; flex-direction: column; align-items: center; padding: 20px; gap: 16px; }
-    .toolbar { display: flex; gap: 10px; align-items: center; background: #1E293B; padding: 10px 16px; border-radius: 10px; }
-    .toolbar button { background: #334155; color: #F8FAFC; border: 0; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-weight: 600; }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; background: #1E293B; padding: 10px 16px; border-radius: 10px; }
+    .toolbar button { background: #334155; color: #F8FAFC; border: 0; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 13px; }
     .toolbar button.active { background: #2563EB; }
+    .toolbar button.reload { background: #0D9488; }
+    .toolbar button.restart { background: #D97706; }
     .badge { font-size: 12px; color: #94A3B8; }
-    #stage-wrap { border: 2px solid #334155; border-radius: 14px; overflow: auto; max-width: 100%; box-shadow: 0 20px 50px rgba(0,0,0,.45); }
+    #stage-wrap { position: relative; border: 2px solid #334155; border-radius: 14px; overflow: auto; max-width: 100%; box-shadow: 0 20px 50px rgba(0,0,0,.45); }
     #stage { position: relative; overflow: hidden; }
+    #error-overlay { display: none; position: absolute; inset: 0; background: rgba(15, 23, 42, .94); color: #FCA5A5; padding: 18px; overflow: auto; z-index: 20; font-family: ui-monospace, monospace; font-size: 12px; }
     .aion-node { position: absolute; display: flex; align-items: center; }
     .aion-btn { border: 0; cursor: pointer; justify-content: center; transition: opacity .15s; }
     .aion-btn:hover { opacity: .9; }
@@ -45,13 +56,16 @@ const WEB_SHELL_HTML: &str = r#"<!doctype html>
 <body>
   <main>
     <div class="toolbar">
-      <strong style="font-size:14px;">AION Web Preview</strong>
-      <button id="btn-mobile" class="active" onclick="loadViewport('mobile')">Mobile 390×844</button>
-      <button id="btn-desktop" onclick="loadViewport('desktop')">Desktop 1440×900</button>
+      <strong style="font-size:14px;">AION Web</strong>
+      <button id="btn-mobile" class="active" onclick="loadViewport('mobile', false)">Mobile 390×844</button>
+      <button id="btn-desktop" onclick="loadViewport('desktop', false)">Desktop 1440×900</button>
+      <button class="reload" onclick="triggerHotReload()" title="Preserva estado #S (tecla r)">⚡ Hot Reload</button>
+      <button class="restart" onclick="triggerHotRestart()" title="Reinicia estado #S (tecla R)">🔄 Hot Restart</button>
       <span id="status-badge" class="badge">Cargando...</span>
     </div>
     <div id="stage-wrap">
       <div id="stage"></div>
+      <pre id="error-overlay"></pre>
     </div>
   </main>
   <aside>
@@ -80,7 +94,18 @@ const WEB_SHELL_HTML: &str = r#"<!doctype html>
       el.textContent = msg;
       el.style.display = 'block';
       clearTimeout(window._toastTimer);
-      window._toastTimer = setTimeout(() => el.style.display = 'none', 3000);
+      window._toastTimer = setTimeout(() => el.style.display = 'none', 2600);
+    }
+
+    function showErrorOverlay(report) {
+      const ov = document.getElementById('error-overlay');
+      if (!report) {
+        ov.style.display = 'none';
+        ov.textContent = '';
+      } else {
+        ov.style.display = 'block';
+        ov.textContent = 'AION Check Error (guarda un .aion válido para Hot Reload):\n\n' + JSON.stringify(report, null, 2);
+      }
     }
 
     function resolveText(tpl) {
@@ -218,61 +243,255 @@ const WEB_SHELL_HTML: &str = r#"<!doctype html>
       updateSignalsUI();
     }
 
-    async function loadViewport(vp) {
+    async function loadViewport(vp, resetSignals) {
       currentViewport = vp;
       document.getElementById('btn-mobile').classList.toggle('active', vp === 'mobile');
       document.getElementById('btn-desktop').classList.toggle('active', vp === 'desktop');
       const resp = await fetch('/__aion/bundle.json?viewport=' + vp);
       bundle = await resp.json();
-      if (Object.keys(signals).length === 0) signals = { ...bundle.signals };
+      if (resetSignals || Object.keys(signals).length === 0) {
+        signals = { ...bundle.signals };
+      } else {
+        // Hot Reload: preserve existing #S values and only add newly declared signals.
+        for (const [k, v] of Object.entries(bundle.signals)) {
+          if (!(k in signals)) signals[k] = v;
+        }
+      }
       document.getElementById('proto-view').textContent = bundle.proto;
       document.getElementById('status-badge').textContent =
-        bundle.overflows.length === 0 ? 'Layout OK (0 overflows)' : (bundle.overflows.length + ' overflow(s)');
+        'rev #' + bundle.revision + ' · ' +
+        (bundle.overflows.length === 0 ? 'Layout OK' : (bundle.overflows.length + ' overflow(s)'));
+      showErrorOverlay(bundle.last_error);
       renderStage();
     }
 
-    loadViewport('mobile');
+    async function triggerHotReload() {
+      await fetch('/__aion/reload', { method: 'POST' });
+    }
+
+    async function triggerHotRestart() {
+      await fetch('/__aion/restart', { method: 'POST' });
+    }
+
+    function connectHotReloadStream() {
+      const es = new EventSource('/__aion/events');
+      es.onmessage = async (ev) => {
+        try {
+          const msg = JSON.parse(ev.data);
+          if (msg.type === 'hot_reload') {
+            await loadViewport(currentViewport, false);
+            showToast('⚡ Hot Reload (rev #' + msg.revision + ') — estado #S preservado');
+          } else if (msg.type === 'hot_restart') {
+            await loadViewport(currentViewport, true);
+            showToast('🔄 Hot Restart (rev #' + msg.revision + ') — estado #S reiniciado');
+          } else if (msg.type === 'check_error') {
+            showErrorOverlay(msg.report);
+            showToast('Error de compilación detectado');
+          }
+        } catch (_) {}
+      };
+    }
+
+    window.addEventListener('keydown', (e) => {
+      if (document.activeElement?.tagName === 'INPUT') return;
+      if (e.key === 'r') triggerHotReload();
+      if (e.key === 'R') triggerHotRestart();
+    });
+
+    loadViewport('mobile', true);
+    connectHotReloadStream();
   </script>
 </body>
 </html>
 "#;
 
 #[derive(Clone)]
-struct WebState {
-    program: Arc<Program>,
-    proto: Arc<String>,
+pub struct LiveApp {
+    pub revision: u64,
+    pub program: Program,
+    pub proto: String,
+    pub api_router: Router,
+    pub last_error: Option<DiagnosticReport>,
 }
 
-pub fn build_web_router(
-    program: Program,
-    registry: Arc<ExtRegistry>,
-    config: RuntimeConfig,
-) -> Result<Router, String> {
-    let api_router =
-        build_router(program.clone(), registry, config).map_err(|e| e.to_string())?;
-    let proto = Arc::new(generate_proto3(&program));
-    let web_state = WebState {
-        program: Arc::new(program),
-        proto,
-    };
+#[derive(Clone)]
+pub struct WebState {
+    pub file_path: Option<PathBuf>,
+    pub registry: Arc<ExtRegistry>,
+    pub config: RuntimeConfig,
+    pub live: Arc<RwLock<LiveApp>>,
+    pub events_tx: broadcast::Sender<String>,
+}
 
-    let web_router = Router::new()
+impl WebState {
+    pub fn new(
+        file_path: Option<PathBuf>,
+        program: Program,
+        registry: Arc<ExtRegistry>,
+        config: RuntimeConfig,
+    ) -> Result<Self, String> {
+        let api_router = build_router(program.clone(), registry.clone(), config.clone())
+            .map_err(|e| e.to_string())?;
+        let proto = generate_proto3(&program);
+        let (events_tx, _) = broadcast::channel(64);
+        Ok(Self {
+            file_path,
+            registry,
+            config,
+            live: Arc::new(RwLock::new(LiveApp {
+                revision: 1,
+                program,
+                proto,
+                api_router,
+                last_error: None,
+            })),
+            events_tx,
+        })
+    }
+
+    /// Re-reads and validates `file_path` from disk.
+    /// When `restart` is `false`, emits `hot_reload` (preserving `#S` signals).
+    /// When `restart` is `true`, emits `hot_restart` (resetting `#S` signals).
+    pub fn reload_from_disk(&self, restart: bool) -> Result<u64, DiagnosticReport> {
+        let Some(ref path) = self.file_path else {
+            let rev = self.live.read().unwrap().revision;
+            let ev = if restart { "hot_restart" } else { "hot_reload" };
+            let _ = self
+                .events_tx
+                .send(json!({ "type": ev, "revision": rev }).to_string());
+            return Ok(rev);
+        };
+
+        let src = match fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(e) => {
+                let diag = aion_ast::Diagnostic::error(
+                    "E_IO",
+                    aion_ast::Phase::Parser,
+                    format!("failed to read {}: {e}", path.display()),
+                    aion_ast::Span::default(),
+                );
+                let report = DiagnosticReport::from_diagnostics(vec![diag]);
+                self.live.write().unwrap().last_error = Some(report.clone());
+                let _ = self
+                    .events_tx
+                    .send(json!({ "type": "check_error", "report": report }).to_string());
+                return Err(report);
+            }
+        };
+
+        let prog = match parse_program(&src) {
+            Ok(p) => p,
+            Err(diags) => {
+                let report = DiagnosticReport::from_diagnostics(diags);
+                self.live.write().unwrap().last_error = Some(report.clone());
+                let _ = self
+                    .events_tx
+                    .send(json!({ "type": "check_error", "report": report }).to_string());
+                return Err(report);
+            }
+        };
+
+        let check = check_program(&prog, &self.registry);
+        if !check.ok {
+            self.live.write().unwrap().last_error = Some(check.clone());
+            let _ = self
+                .events_tx
+                .send(json!({ "type": "check_error", "report": check }).to_string());
+            return Err(check);
+        }
+
+        let api_router = match build_router(
+            prog.clone(),
+            self.registry.clone(),
+            self.config.clone(),
+        ) {
+            Ok(r) => r,
+            Err(e) => {
+                let diag = aion_ast::Diagnostic::error(
+                    "E_RUNTIME",
+                    aion_ast::Phase::Checker,
+                    e.to_string(),
+                    aion_ast::Span::default(),
+                );
+                let report = DiagnosticReport::from_diagnostics(vec![diag]);
+                self.live.write().unwrap().last_error = Some(report.clone());
+                let _ = self
+                    .events_tx
+                    .send(json!({ "type": "check_error", "report": report }).to_string());
+                return Err(report);
+            }
+        };
+
+        let proto = generate_proto3(&prog);
+        let new_rev = {
+            let mut guard = self.live.write().unwrap();
+            guard.revision += 1;
+            guard.program = prog;
+            guard.proto = proto;
+            guard.api_router = api_router;
+            guard.last_error = None;
+            guard.revision
+        };
+
+        let ev_type = if restart { "hot_restart" } else { "hot_reload" };
+        let _ = self
+            .events_tx
+            .send(json!({ "type": ev_type, "revision": new_rev }).to_string());
+        Ok(new_rev)
+    }
+}
+
+pub fn build_web_router(state: WebState) -> Router {
+    Router::new()
         .route("/", get(serve_index))
         .route("/__aion/bundle.json", get(serve_bundle))
-        .with_state(web_state);
-
-    Ok(api_router.merge(web_router))
+        .route("/__aion/events", get(serve_sse_events))
+        .route("/__aion/reload", post(handle_hot_reload))
+        .route("/__aion/restart", post(handle_hot_restart))
+        .fallback(forward_to_live_api)
+        .with_state(state)
 }
 
 pub async fn serve_web(
+    file_path: Option<PathBuf>,
     program: Program,
     registry: Arc<ExtRegistry>,
     config: RuntimeConfig,
 ) -> Result<(), String> {
     let port = extract_port(&program).unwrap_or(8080);
-    let router = build_web_router(program, registry, config)?;
+    let state = WebState::new(file_path.clone(), program, registry, config)?;
+
+    // Spawn live file watcher for automatic Hot Reload on save.
+    if let Some(watch_path) = file_path {
+        let watcher_state = state.clone();
+        tokio::spawn(async move {
+            let mut last_mtime: Option<SystemTime> = fs::metadata(&watch_path)
+                .and_then(|m| m.modified())
+                .ok();
+            let mut ticker = tokio::time::interval(Duration::from_millis(300));
+            loop {
+                ticker.tick().await;
+                let cur_mtime = fs::metadata(&watch_path)
+                    .and_then(|m| m.modified())
+                    .ok();
+                if cur_mtime != last_mtime && cur_mtime.is_some() {
+                    last_mtime = cur_mtime;
+                    match watcher_state.reload_from_disk(false) {
+                        Ok(rev) => eprintln!("⚡ AION Hot Reload -> rev #{rev}"),
+                        Err(report) => eprintln!(
+                            "AION Hot Reload error ({} issue(s))",
+                            report.error_count
+                        ),
+                    }
+                }
+            }
+        });
+    }
+
+    let router = build_web_router(state);
     let addr = format!("127.0.0.1:{port}");
-    eprintln!("AION Web Preview running at http://{addr}");
+    eprintln!("AION Web Preview (Hot Reload enabled) running at http://{addr}");
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .map_err(|e| format!("failed to bind {addr}: {e}"))?;
@@ -300,6 +519,82 @@ async fn serve_index() -> Html<&'static str> {
     Html(WEB_SHELL_HTML)
 }
 
+async fn handle_hot_reload(State(state): State<WebState>) -> Response {
+    match state.reload_from_disk(false) {
+        Ok(rev) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "application/json")],
+            json!({ "ok": true, "type": "hot_reload", "revision": rev }).to_string(),
+        )
+            .into_response(),
+        Err(report) => (
+            StatusCode::BAD_REQUEST,
+            [(header::CONTENT_TYPE, "application/json")],
+            report.to_json_pretty().unwrap_or_default(),
+        )
+            .into_response(),
+    }
+}
+
+async fn handle_hot_restart(State(state): State<WebState>) -> Response {
+    match state.reload_from_disk(true) {
+        Ok(rev) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "application/json")],
+            json!({ "ok": true, "type": "hot_restart", "revision": rev }).to_string(),
+        )
+            .into_response(),
+        Err(report) => (
+            StatusCode::BAD_REQUEST,
+            [(header::CONTENT_TYPE, "application/json")],
+            report.to_json_pretty().unwrap_or_default(),
+        )
+            .into_response(),
+    }
+}
+
+async fn serve_sse_events(State(state): State<WebState>) -> Response {
+    let mut rx = state.events_tx.subscribe();
+    let (tx, body_rx) = tokio::sync::mpsc::channel::<Result<String, std::io::Error>>(16);
+    tokio::spawn(async move {
+        let _ = tx.send(Ok(": connected\n\n".to_string())).await;
+        while let Ok(msg) = rx.recv().await {
+            if tx.send(Ok(format!("data: {msg}\n\n"))).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    let stream = ReceiverStream(body_rx);
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "text/event-stream")
+        .header(header::CACHE_CONTROL, "no-cache")
+        .body(Body::from_stream(stream))
+        .unwrap()
+}
+
+struct ReceiverStream(tokio::sync::mpsc::Receiver<Result<String, std::io::Error>>);
+
+impl futures_core::Stream for ReceiverStream {
+    type Item = Result<String, std::io::Error>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        self.0.poll_recv(cx)
+    }
+}
+
+async fn forward_to_live_api(State(state): State<WebState>, req: Request) -> Response {
+    let router = state.live.read().unwrap().api_router.clone();
+    match router.oneshot(req).await {
+        Ok(resp) => resp,
+        Err(infallible) => match infallible {},
+    }
+}
+
 async fn serve_bundle(
     State(state): State<WebState>,
     Query(query): Query<HashMap<String, String>>,
@@ -308,9 +603,20 @@ async fn serve_bundle(
         Some("desktop") => Viewport::DESKTOP,
         _ => Viewport::MOBILE,
     };
-    let signal_store = SignalStore::from_program(&state.program);
+
+    let (revision, program, proto, last_error) = {
+        let guard = state.live.read().unwrap();
+        (
+            guard.revision,
+            guard.program.clone(),
+            guard.proto.clone(),
+            guard.last_error.clone(),
+        )
+    };
+
+    let signal_store = SignalStore::from_program(&program);
     let mut initial_signals = serde_json::Map::new();
-    for node in &state.program.nodes {
+    for node in &program.nodes {
         if let NodeKind::Signal(_) = &node.kind {
             if let Some(val) = signal_store.get(&node.id) {
                 initial_signals.insert(
@@ -321,15 +627,17 @@ async fn serve_bundle(
         }
     }
 
-    match compute_layout(&state.program, viewport, Some(&signal_store)) {
+    match compute_layout(&program, viewport, Some(&signal_store)) {
         Ok(layout) => {
             let overflows = layout.detect_overflows();
             let payload = json!({
-                "program": &*state.program,
+                "revision": revision,
+                "program": program,
                 "signals": initial_signals,
                 "layout": layout,
                 "overflows": overflows,
-                "proto": &*state.proto,
+                "proto": proto,
+                "last_error": last_error,
             });
             (
                 StatusCode::OK,

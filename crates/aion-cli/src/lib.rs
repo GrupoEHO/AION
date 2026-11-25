@@ -440,4 +440,56 @@ mod tests {
 
         let _ = fs::remove_dir_all(&tmp);
     }
+
+    #[test]
+    fn web_hot_reload_and_hot_restart_swap_program_and_preserve_on_error() {
+        let reg = Arc::new(build_registry(None).unwrap());
+        let tmp_file = std::env::temp_dir().join(format!("aion_hot_reload_{}.aion", std::process::id()));
+        let v1 = r#"
+#SRV0:HTTP[port:8080, proto:on]
+#S0:i32=0
+#N0:ROOT[0,0,100%,100%,#F8FAFC]{#N1}
+#N1:TXT[18,600,#0F172A]{"V1: {#S0}"}
+"#;
+        fs::write(&tmp_file, v1).unwrap();
+        let prog1 = parse_program(v1).unwrap();
+        let state = crate::web::WebState::new(
+            Some(tmp_file.clone()),
+            prog1,
+            reg,
+            aion_runtime_net::RuntimeConfig::new(),
+        )
+        .unwrap();
+        let mut rx = state.events_tx.subscribe();
+
+        // Hot Reload with valid v2 edit
+        let v2 = r#"
+#SRV0:HTTP[port:8080, proto:on]
+#S0:i32=0
+#N0:ROOT[0,0,100%,100%,#F8FAFC]{#N1}
+#N1:TXT[18,600,#0F172A]{"V2: {#S0}"}
+"#;
+        fs::write(&tmp_file, v2).unwrap();
+        let rev2 = state.reload_from_disk(false).expect("hot reload v2 should succeed");
+        assert_eq!(rev2, 2);
+        let ev_reload = rx.try_recv().unwrap();
+        assert!(ev_reload.contains("\"hot_reload\""));
+
+        // Invalid edit does NOT crash or overwrite revision 2
+        fs::write(&tmp_file, "#N0:BTN[500,48,8,#2563EB]{}").unwrap();
+        let err_report = state.reload_from_disk(false).unwrap_err();
+        assert!(!err_report.ok);
+        assert_eq!(state.live.read().unwrap().revision, 2);
+        let ev_err = rx.try_recv().unwrap();
+        assert!(ev_err.contains("\"check_error\""));
+
+        // Hot Restart after fixing file
+        fs::write(&tmp_file, v2).unwrap();
+        let rev3 = state.reload_from_disk(true).expect("hot restart should succeed");
+        assert_eq!(rev3, 3);
+        let ev_restart = rx.try_recv().unwrap();
+        assert!(ev_restart.contains("\"hot_restart\""));
+
+        let _ = fs::remove_file(&tmp_file);
+    }
 }

@@ -232,7 +232,8 @@ fn main() {
                 eprintln!("Usage: aion web <file.aion> [--manifests-dir <dir>]");
                 process::exit(2);
             }
-            let src = read_file_or_exit(Path::new(&args[2]));
+            let web_file = PathBuf::from(&args[2]);
+            let src = read_file_or_exit(&web_file);
             let reg = build_registry(Some(&manifests_dir)).unwrap_or_else(|e| {
                 eprintln!("{{\"ok\":false,\"error\":\"{e}\"}}");
                 process::exit(1);
@@ -257,7 +258,12 @@ fn main() {
                     eprintln!("{{\"ok\":false,\"error\":\"tokio runtime error: {e}\"}}");
                     process::exit(1);
                 });
-            if let Err(e) = rt.block_on(serve_web(prog, Arc::new(reg), RuntimeConfig::new())) {
+            if let Err(e) = rt.block_on(serve_web(
+                Some(web_file),
+                prog,
+                Arc::new(reg),
+                RuntimeConfig::new(),
+            )) {
                 eprintln!("{{\"ok\":false,\"error\":\"{e}\"}}");
                 process::exit(1);
             }
