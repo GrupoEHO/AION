@@ -9,7 +9,7 @@ use aion_ast::DiagnosticReport;
 use aion_checker::check_program;
 use aion_cli::mcp::serve_mcp_stdio;
 use aion_cli::web::serve_web;
-use aion_cli::{build_registry, cmd_check, cmd_parse, cmd_patch};
+use aion_cli::{build_registry, cmd_check, cmd_create, cmd_parse, cmd_patch};
 use aion_parser::parse_program;
 use aion_runtime_net::{serve, RuntimeConfig};
 
@@ -38,7 +38,7 @@ fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
         eprintln!(
-            "Usage:\n  aion parse <file.aion>\n  aion check <file.aion> [--manifests-dir <dir>]\n  aion patch <file.aion> <patch.json> [--manifests-dir <dir>]\n  aion run <file.aion> [--manifests-dir <dir>]\n  aion web <file.aion> [--manifests-dir <dir>]\n  aion mcp [--manifests-dir <dir>]"
+            "Usage:\n  aion create <name> [dir]\n  aion parse <file.aion>\n  aion check <file.aion> [--manifests-dir <dir>]\n  aion patch <file.aion> <patch.json> [--manifests-dir <dir>]\n  aion run <file.aion> [--manifests-dir <dir>]\n  aion web <file.aion> [--manifests-dir <dir>]\n  aion mcp [--manifests-dir <dir>]"
         );
         process::exit(2);
     }
@@ -47,6 +47,23 @@ fn main() {
     let manifests_dir = find_manifests_dir(&args);
 
     match cmd {
+        "create" => {
+            if args.len() < 3 {
+                eprintln!("Usage: aion create <name> [dir]");
+                process::exit(2);
+            }
+            let base_dir = args
+                .get(3)
+                .map(PathBuf::from)
+                .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+            match cmd_create(&args[2], &base_dir) {
+                Ok(payload) => println!("{}", serde_json::to_string_pretty(&payload).unwrap()),
+                Err(err) => {
+                    println!("{{\"ok\":false,\"error\":\"{err}\"}}");
+                    process::exit(1);
+                }
+            }
+        }
         "parse" => {
             if args.len() < 3 {
                 eprintln!("Usage: aion parse <file.aion>");

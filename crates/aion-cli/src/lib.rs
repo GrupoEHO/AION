@@ -44,6 +44,101 @@ pub fn build_registry(manifests_dir: Option<&Path>) -> Result<ExtRegistry, Strin
     Ok(reg)
 }
 
+/// Executes `aion create <name> [dir]`: scaffolds a canonical 3-file AION project
+/// (`aion.toml`, `app.aion`, `AGENTS.md`) ready for AI-driven development.
+pub fn cmd_create(project_name: &str, base_dir: &Path) -> Result<serde_json::Value, String> {
+    let trimmed = project_name.trim();
+    if trimmed.is_empty()
+        || !trimmed
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(format!(
+            "invalid project name `{project_name}`: use ASCII letters, digits, `-`, or `_`"
+        ));
+    }
+
+    let project_dir = base_dir.join(trimmed);
+    if project_dir.exists() {
+        return Err(format!(
+            "directory `{}` already exists",
+            project_dir.display()
+        ));
+    }
+
+    fs::create_dir_all(&project_dir)
+        .map_err(|e| format!("failed to create {}: {e}", project_dir.display()))?;
+
+    let aion_toml = format!(
+        r#"[project]
+name = "{trimmed}"
+version = "0.1.0"
+entry = "app.aion"
+targets = ["web", "android", "ios"]
+
+[ext]
+# Add external ABI modules as needed:
+# db = "aion/mongo@1.2"
+# auth = "aion/firebase-auth@2.0"
+"#
+    );
+
+    let app_aion = format!(
+        r#"// {trimmed} — Canonical AION Full-Stack Starter
+#SRV0:HTTP[port:8080, proto:on]
+
+#M0:StatusRes{{message:str, count:i32}}
+
+#API0:#SRV0.POST["/v1/ping"] IN{{current:i32}} OUT{{#M0}} {{
+  {{message: "ok", count: in.current + 1}} -> RET
+}}
+
+#S0:i32=0
+#N0:ROOT[0,0,100%,100%,#F8FAFC]{{#N1}}
+#N1:FLEX[v,c,c,16]{{#N2,#N3,#N4}}
+#N2:TXT[22,700,#0F172A]{{"{trimmed} · AION"}}
+#N3:TXT[16,500,#334155]{{"Contador: {{#S0}}"}}
+#N4:BTN[180,46,8,#2563EB]{{#N5}} @tap->CALL(#API0,{{current:#S0}})=>#S0=res.count @err->TOAST("Error")
+#N5:TXT[15,600,#FFFFFF]{{"Incrementar (+1)"}}
+"#
+    );
+
+    let agents_md = format!(
+        r#"# {trimmed} — AION Agent Guidelines
+
+1. **Zero Nesting:** Keep `app.aion` strictly flat (`#CFG`, `#EXT`, `#SRV`, `#MW`, `#M`, `#API`, `#S`, `#N`).
+2. **Verify External Modules First:** Always call MCP tool `aion_inspect_ext` before invoking any `#EXT` method.
+3. **Mandatory Validation Loop:** After every edit or `aion_patch`, run:
+   - `aion_check` (must return `ok: true` with `0` type, `#EXT`, `@err`, and `E_UI_OVERFLOW` errors).
+   - `aion_layout_tree` for both `mobile` (`390x844`) and `desktop` (`1440x900`).
+4. **Live Web Preview:** Run `aion web app.aion` to test the UI + `#API` endpoints in the browser.
+"#
+    );
+
+    let toml_path = project_dir.join("aion.toml");
+    let app_path = project_dir.join("app.aion");
+    let agents_path = project_dir.join("AGENTS.md");
+
+    fs::write(&toml_path, aion_toml).map_err(|e| format!("write aion.toml: {e}"))?;
+    fs::write(&app_path, &app_aion).map_err(|e| format!("write app.aion: {e}"))?;
+    fs::write(&agents_path, agents_md).map_err(|e| format!("write AGENTS.md: {e}"))?;
+
+    Ok(json!({
+        "ok": true,
+        "project": trimmed,
+        "path": project_dir.display().to_string(),
+        "files": [
+            toml_path.display().to_string(),
+            app_path.display().to_string(),
+            agents_path.display().to_string(),
+        ],
+        "next_steps": [
+            format!("aion check {}/app.aion", project_dir.display()),
+            format!("aion web {}/app.aion", project_dir.display()),
+        ]
+    }))
+}
+
 /// Executes `aion parse`: returns pretty JSON of the AST or structured JSON errors.
 pub fn cmd_parse(source: &str) -> Result<String, String> {
     let prog = parse_to_json_report(source)?;
@@ -271,7 +366,8 @@ mod tests {
                 "aion_check",
                 "aion_patch",
                 "aion_inspect_ext",
-                "aion_layout_tree"
+                "aion_layout_tree",
+                "aion_create"
             ]
         );
 
@@ -297,5 +393,23 @@ mod tests {
         let layout_body: Value = serde_json::from_str(layout_text).unwrap();
         assert_eq!(layout_body["ok"], false);
         assert_eq!(layout_body["overflows"][0]["child_id"], "#N2");
+    }
+
+    #[test]
+    fn cmd_create_scaffolds_valid_aion_project() {
+        let reg = build_registry(None).unwrap();
+        let tmp = std::env::temp_dir().join(format!("aion_create_test_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        let res = cmd_create("xion", &tmp).expect("create should succeed");
+        assert_eq!(res["ok"], true);
+        let app_src = fs::read_to_string(tmp.join("xion/app.aion")).unwrap();
+        let (ok, report_json) = cmd_check(&app_src, &reg);
+        assert!(ok, "starter app.aion must pass aion check: {report_json}");
+        assert!(tmp.join("xion/aion.toml").is_file());
+        assert!(tmp.join("xion/AGENTS.md").is_file());
+
+        let _ = fs::remove_dir_all(&tmp);
     }
 }

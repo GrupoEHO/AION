@@ -203,6 +203,18 @@ fn tool_definitions() -> Value {
                     }
                 }
             }
+        },
+        {
+            "name": "aion_create",
+            "description": "Scaffold a canonical minimal AION project (aion.toml, app.aion, AGENTS.md) ready for AI development.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["name"],
+                "properties": {
+                    "name": { "type": "string", "description": "Project directory name (e.g. xion)." },
+                    "dir": { "type": "string", "description": "Optional parent directory path (defaults to current working directory)." }
+                }
+            }
         }
     ])
 }
@@ -344,6 +356,21 @@ fn call_tool(
                     ))
                 }
                 Err(e) => Ok((json!({ "ok": false, "error": e.to_string() }), true)),
+            }
+        }
+        "aion_create" => {
+            let project_name = args
+                .get("name")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "missing required string argument `name`".to_string())?;
+            let base_dir = args
+                .get("dir")
+                .and_then(Value::as_str)
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")));
+            match crate::cmd_create(project_name, &base_dir) {
+                Ok(payload) => Ok((payload, false)),
+                Err(err) => Ok((json!({ "ok": false, "error": err }), true)),
             }
         }
         other => Err(format!("unknown tool `{other}`")),
