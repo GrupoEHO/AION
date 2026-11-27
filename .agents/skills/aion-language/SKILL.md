@@ -23,7 +23,8 @@ description: >-
   - `aion create <name> [dir]` — Scaffolds a minimal canonical project (`aion.toml`, `app.aion`, `AGENTS.md`).
   - `aion check <file.aion>` — Validates syntax, types, cycles, `#EXT` calls, `@err`, and layout (`mobile` + `desktop`) as JSON.
   - `aion parse <file.aion>` — Outputs flat AST JSON.
-  - `aion patch <file.aion> <patch.json>` — Applies transactional `ADD`/`PATCH`/`DEL` AST patches and validates.
+  - `aion fmt <file.aion> [--write]` — Formats `.aion` source canonically from the AST.
+  - `aion patch <file.aion> <patch.json> [--write]` — Applies transactional `ADD`/`PATCH`/`DEL` AST patches, validates, and (with `--write`) writes canonical `.aion` back to disk.
   - `aion web <file.aion>` — Runs live HTTP/Protobuf backend + interactive Web Preview (with Hot Reload & Hot Restart) at `http://127.0.0.1:8080`.
   - `aion build appbundle --release [file.aion]` (or `aion build android`) — Validates and compiles a native Android App Bundle (`.aab`) via Gradle (auto-reads `aion.toml` when `[file.aion]` is omitted).
   - `aion build ios [--release|--debug] [--simulator] [--no-codesign] [file.aion]` — Validates, generates a native SwiftUI Xcode project (`AionApp.xcodeproj`), and compiles an iOS `.app` (Simulator or Device) via `xcodebuild`.
@@ -104,8 +105,8 @@ Supports `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, Gin-style `:id` or `{id}` rout
 - `FLEX[dir(v|h), justify(c|s|e|sb|sa), align(c|s|e|st), gap, scroll?]{#N2,#N3}` — Flexbox container.
 - `NAV[width, height, bg_hex]{#N_tab1,#N_tab2}` — Horizontal navigation bar.
 - `ROUTER[#N_initial_screen]{#N_screen1,#N_screen2,...}` — Multi-screen container (shows ONLY the active screen; switches live via `@tap->NAV(#N_screen2)` without restarting or creating extra servers).
-- `LIST[dir(v|h), gap, noscroll?]{#N_item}` — Scrollable list container.
-- `TXT[font_size, weight, color_hex]{"Text with {#S0} interpolation"}` — Text label.
+- `LIST[dir(v|h), gap, #S_list?, noscroll?]{#N_row}` — Scrollable list container. When bound to a `list<#M>` signal `#S_list`, dynamically repeats `#N_row` for every element exposing `{item.field}` and `index`.
+- `TXT[font_size, weight, color_hex]{"Text with {#S0} or {item.field}"}` — Text label.
 - `INP[width, height, radius, bg_hex, #S_bound]{"Placeholder..."}` — Text input bound to signal `#S_bound`.
 - `BTN[width, height, radius, bg_hex]{#N_label} @tap->... @err->...` — Interactive button.
 
@@ -126,14 +127,21 @@ Supports `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, Gin-style `:id` or `{id}` rout
 #N31:TXT[20,700,#0F172A]{"Pantalla Tarjetas"}
 ```
 
-### UI Event Handlers
+### UI Event Handlers & Signal Persistence
+- Local persistence across Web (`localStorage`), Android (`SharedPreferences`), and iOS (`UserDefaults`):
+  `#S_gastos:list<#M_Gasto> = [] @persist`
+- Lifecycle initial load (on `ROOT` or `ROUTER` screens):
+  `@init->CALL(#API_list,{})=>#S_gastos=res @err->TOAST("Error")`
 - API Call with signal binding (requires `@err` on the same node!):
   `@tap->CALL(#API0,{delta:10})=>#S0=res.pts @err->TOAST("Error")`
 - Optional loading handler:
   `@loading->TOAST("Cargando...")`
 - Navigation:
   `@tap->NAV(#N_screen)`
-- Direct signal mutation:
+- Dynamic list mutations (`PUSH` / `REMOVE`):
+  `@tap->PUSH(#S_gastos, {concepto:#S_concepto, monto:150.0})`
+  `@tap->REMOVE(#S_gastos, index)`
+- Direct signal mutation (semantic IDs like `#N_home`, `#S_total`, `#M_Gasto`, `#API_save` are recommended):
   `@tap->#S0=0`
 
 ## 5. Complete Valid Example

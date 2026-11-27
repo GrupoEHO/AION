@@ -87,8 +87,33 @@ const WEB_SHELL_HTML: &str = r#"<!doctype html>
   <script>
     let bundle = null;
     let signals = {};
+    let persistedSet = new Set();
     let activeScreens = {};
+    let didInitRoot = false;
     let currentViewport = 'mobile';
+
+    function syncPersistedSignals(loadFromStorage) {
+      persistedSet.clear();
+      for (const n of bundle.program.nodes) {
+        if (n.kind?.node_type === 'signal' && n.kind.persist) {
+          persistedSet.add(n.id);
+          if (loadFromStorage) {
+            try {
+              const raw = localStorage.getItem('aion_persist:' + n.id);
+              if (raw !== null) signals[n.id] = JSON.parse(raw);
+            } catch (_) {}
+          }
+        }
+      }
+    }
+
+    function savePersistedSignals() {
+      for (const id of persistedSet) {
+        try {
+          localStorage.setItem('aion_persist:' + id, JSON.stringify(signals[id]));
+        } catch (_) {}
+      }
+    }
 
     function initRouters() {
       for (const n of bundle.program.nodes) {
@@ -101,7 +126,26 @@ const WEB_SHELL_HTML: &str = r#"<!doctype html>
       }
     }
 
+    function getDynamicListSig(ui) {
+      if (!ui || ui.widget !== 'LIST') return null;
+      const ref = (ui.args || []).find(a => a.arg_kind === 'node_ref');
+      return ref ? ref.value : null;
+    }
+
+    function isInsideDynamicListTemplate(id, nodeMap, parentMap) {
+      let cur = id;
+      while (cur) {
+        const p = parentMap[cur];
+        if (!p) break;
+        const pUi = nodeMap[p];
+        if (getDynamicListSig(pUi)) return true;
+        cur = p;
+      }
+      return false;
+    }
+
     function isNodeVisible(id, nodeMap, parentMap) {
+      if (isInsideDynamicListTemplate(id, nodeMap, parentMap)) return false;
       let cur = id;
       while (cur) {
         const p = parentMap[cur];
@@ -123,6 +167,8 @@ const WEB_SHELL_HTML: &str = r#"<!doctype html>
           if (children.includes(targetId)) {
             activeScreens[n.id] = targetId;
             renderStage();
+            const screenUi = bundle.program.nodes.find(x => x.id === targetId)?.kind;
+            if (screenUi) runNodeEvent(screenUi, 'init', null);
             return true;
           }
         }
@@ -149,51 +195,115 @@ const WEB_SHELL_HTML: &str = r#"<!doctype html>
       }
     }
 
-    function resolveText(tpl) {
+    function resolveText(tpl, itemCtx) {
       let out = tpl;
       for (const [k, v] of Object.entries(signals)) {
-        out = out.replaceAll('{' + k + '}', String(v ?? ''));
+        out = out.replaceAll('{' + k + '}', typeof v === 'object' && v !== null ? JSON.stringify(v) : String(v ?? ''));
+      }
+      if (itemCtx && itemCtx.item !== undefined) {
+        if (itemCtx.item && typeof itemCtx.item === 'object') {
+          for (const [fk, fv] of Object.entries(itemCtx.item)) {
+            out = out.replaceAll('{item.' + fk + '}', String(fv ?? ''));
+          }
+        } else {
+          out = out.replaceAll('{item}', String(itemCtx.item ?? ''));
+        }
       }
       return out;
     }
 
-    function evalExpr(expr, resObj) {
+    function evalExpr(expr, resObj, itemCtx) {
       if (!expr || !expr.kind) return null;
       const k = expr.kind.expr_kind;
       const v = expr.kind.value;
       if (k === 'int' || k === 'float' || k === 'str' || k === 'bool') return v;
       if (k === 'node_ref') return signals[v];
-      if (k === 'ident') return v === 'res' ? resObj : null;
+      if (k === 'ident') {
+        if (v === 'res') return resObj;
+        if (v === 'item') return itemCtx?.item;
+        if (v === 'index') return itemCtx?.index;
+        return null;
+      }
       if (k === 'member') {
-        const obj = evalExpr(v.object, resObj);
+        const obj = evalExpr(v.object, resObj, itemCtx);
         return obj && typeof obj === 'object' ? obj[v.field] : null;
       }
       if (k === 'object') {
         const obj = {};
-        for (const [key, valExpr] of v) obj[key] = evalExpr(valExpr, resObj);
+        for (const [key, valExpr] of v) obj[key] = evalExpr(valExpr, resObj, itemCtx);
         return obj;
+      }
+      if (k === 'list') {
+        return (v || []).map(x => evalExpr(x, resObj, itemCtx));
+      }
+      if (k === 'binary') {
+        const l = evalExpr(v.left, resObj, itemCtx);
+        const r = evalExpr(v.right, resObj, itemCtx);
+        switch (v.op) {
+          case 'Add': return (Number(l) || 0) + (Number(r) || 0);
+          case 'Sub': return (Number(l) || 0) - (Number(r) || 0);
+          case 'Mul': return (Number(l) || 0) * (Number(r) || 0);
+          case 'Div': return Number(r) ? (Number(l) / Number(r)) : 0;
+          case 'Eq': return l === r;
+          case 'Ne': return l !== r;
+        }
       }
       return null;
     }
 
-    async function handleNodeClick(ui) {
-      const tap = (ui.events || []).find(e => e.event === 'tap');
-      if (!tap) return;
-      const act = tap.action;
-      if (act.action_kind === 'generic' && act.name === 'NAV') {
-        const target = act.args?.[0]?.kind?.value;
-        if (target) navigateTo(target);
+    async function runNodeEvent(ui, evName, itemCtx) {
+      const handler = (ui.events || []).find(e => e.event === evName);
+      if (!handler) return;
+      const act = handler.action;
+      if (act.action_kind === 'generic') {
+        if (act.name === 'NAV') {
+          const target = act.args?.[0]?.kind?.value;
+          if (target) navigateTo(target);
+          return;
+        }
+        if (act.name === 'PUSH') {
+          const sigId = act.args?.[0]?.kind?.value;
+          const elem = evalExpr(act.args?.[1], null, itemCtx);
+          if (sigId) {
+            const cur = Array.isArray(signals[sigId]) ? [...signals[sigId]] : [];
+            cur.push(elem);
+            signals[sigId] = cur;
+            savePersistedSignals();
+            renderStage();
+          }
+          return;
+        }
+        if (act.name === 'REMOVE') {
+          const sigId = act.args?.[0]?.kind?.value;
+          const target = evalExpr(act.args?.[1], null, itemCtx);
+          if (sigId && Array.isArray(signals[sigId])) {
+            const cur = [...signals[sigId]];
+            if (typeof target === 'number') cur.splice(target, 1);
+            else {
+              const idx = cur.indexOf(target);
+              if (idx >= 0) cur.splice(idx, 1);
+            }
+            signals[sigId] = cur;
+            savePersistedSignals();
+            renderStage();
+          }
+          return;
+        }
+      }
+      if (act.action_kind === 'toast') {
+        showToast(evalExpr(act.message, null, itemCtx) || '');
         return;
       }
       if (act.action_kind === 'set') {
-        signals[act.signal] = evalExpr(act.value, null);
-        updateSignalsUI();
+        signals[act.signal] = evalExpr(act.value, null, itemCtx);
+        savePersistedSignals();
+        renderStage();
         return;
       }
       if (act.action_kind === 'call') {
         const apiNode = bundle.program.nodes.find(n => n.id === act.api)?.kind;
         if (!apiNode) return;
-        const payload = evalExpr(act.payload, null) || {};
+        const payload = evalExpr(act.payload, null, itemCtx) || {};
         try {
           const resp = await fetch(apiNode.path, {
             method: apiNode.method.toUpperCase(),
@@ -204,19 +314,69 @@ const WEB_SHELL_HTML: &str = r#"<!doctype html>
           document.getElementById('api-view').textContent = JSON.stringify(data, null, 2);
           if (!resp.ok) throw new Error(data.error || ('HTTP ' + resp.status));
           if (act.bind) {
-            signals[act.bind.signal] = evalExpr(act.bind.value, data);
-            updateSignalsUI();
+            signals[act.bind.signal] = evalExpr(act.bind.value, data, itemCtx);
+            savePersistedSignals();
+            renderStage();
           }
           showToast('Respuesta OK de ' + act.api);
         } catch (err) {
           const errHandler = (ui.events || []).find(e => e.event === 'err');
           if (errHandler && errHandler.action.action_kind === 'toast') {
-            showToast(evalExpr(errHandler.action.message, null) || String(err));
+            showToast(evalExpr(errHandler.action.message, null, itemCtx) || String(err));
           } else {
             showToast('Error: ' + err.message);
           }
         }
       }
+    }
+
+    async function handleNodeClick(ui) {
+      return runNodeEvent(ui, 'tap', null);
+    }
+
+    function renderDynamicNode(tplId, nodeMap, itemCtx) {
+      const ui = nodeMap[tplId];
+      if (!ui || ui.node_type !== 'ui') return null;
+      if (ui.widget === 'TXT') {
+        const span = document.createElement('span');
+        span.style.fontSize = (ui.args[0]?.value ?? 14) + 'px';
+        span.style.fontWeight = String(ui.args[1]?.value ?? 400);
+        span.style.color = ui.args[2]?.value ?? '#0F172A';
+        if (ui.body?.body_kind === 'text') span.textContent = resolveText(ui.body.value.template, itemCtx);
+        return span;
+      }
+      if (ui.widget === 'BTN') {
+        const btn = document.createElement('button');
+        btn.className = 'aion-btn';
+        btn.style.display = 'inline-flex';
+        btn.style.alignItems = 'center';
+        btn.style.width = (ui.args[0]?.value ?? 90) + 'px';
+        btn.style.height = (ui.args[1]?.value ?? 32) + 'px';
+        btn.style.borderRadius = (ui.args[2]?.value ?? 6) + 'px';
+        btn.style.background = ui.args[3]?.value ?? '#2563EB';
+        btn.onclick = () => runNodeEvent(ui, 'tap', itemCtx);
+        for (const ch of (ui.body?.body_kind === 'children' ? ui.body.value : [])) {
+          const c = renderDynamicNode(ch, nodeMap, itemCtx);
+          if (c) btn.appendChild(c);
+        }
+        return btn;
+      }
+      const div = document.createElement('div');
+      div.style.display = 'flex';
+      div.style.flexDirection = ui.args[0]?.value === 'h' ? 'row' : 'column';
+      const j = ui.args[1]?.value;
+      div.style.justifyContent = j === 'sb' ? 'space-between' : j === 'c' ? 'center' : 'flex-start';
+      div.style.alignItems = 'center';
+      div.style.gap = (ui.args[3]?.value ?? 8) + 'px';
+      div.style.padding = '8px 10px';
+      div.style.background = '#FFFFFF';
+      div.style.borderRadius = '8px';
+      div.style.border = '1px solid #E2E8F0';
+      for (const ch of (ui.body?.body_kind === 'children' ? ui.body.value : [])) {
+        const c = renderDynamicNode(ch, nodeMap, itemCtx);
+        if (c) div.appendChild(c);
+      }
+      return div;
     }
 
     function updateSignalsUI() {
@@ -270,6 +430,7 @@ const WEB_SHELL_HTML: &str = r#"<!doctype html>
             el.value = signals[boundSig] ?? '';
             el.addEventListener('input', e => {
               signals[boundSig] = e.target.value;
+              savePersistedSignals();
               updateSignalsUI();
             });
           }
@@ -281,14 +442,31 @@ const WEB_SHELL_HTML: &str = r#"<!doctype html>
           el.style.color = ui.args[2]?.value ?? '#0F172A';
           if (ui.body?.body_kind === 'text') {
             el.dataset.template = ui.body.value.template;
-            el.textContent = resolveText(ui.body.value.template);
+            el.textContent = resolveText(ui.body.value.template, null);
           }
         } else {
           el = document.createElement('div');
           el.className = 'aion-node';
           if (ui.widget === 'ROOT' && ui.args[4]?.value) el.style.background = ui.args[4].value;
           if (ui.widget === 'NAV' && ui.args[2]?.value) el.style.background = ui.args[2].value;
-          if (ui.widget === 'LIST') el.style.overflow = 'auto';
+          if (ui.widget === 'LIST') {
+            el.style.overflow = 'auto';
+            el.style.display = 'flex';
+            el.style.flexDirection = ui.args[0]?.value === 'h' ? 'row' : 'column';
+            el.style.alignItems = 'stretch';
+            el.style.gap = (ui.args[1]?.value ?? 8) + 'px';
+            const listSig = getDynamicListSig(ui);
+            if (listSig) {
+              const items = Array.isArray(signals[listSig]) ? signals[listSig] : [];
+              const tplId = ui.body?.body_kind === 'children' ? ui.body.value[0] : null;
+              if (tplId) {
+                items.forEach((item, index) => {
+                  const rowEl = renderDynamicNode(tplId, nodeMap, { item, index });
+                  if (rowEl) el.appendChild(rowEl);
+                });
+              }
+            }
+          }
         }
 
         el.style.left = box.x + 'px';
@@ -308,11 +486,13 @@ const WEB_SHELL_HTML: &str = r#"<!doctype html>
       bundle = await resp.json();
       if (resetSignals || Object.keys(signals).length === 0) {
         signals = { ...bundle.signals };
+        syncPersistedSignals(true);
       } else {
         // Hot Reload: preserve existing #S values and only add newly declared signals.
         for (const [k, v] of Object.entries(bundle.signals)) {
           if (!(k in signals)) signals[k] = v;
         }
+        syncPersistedSignals(false);
       }
       document.getElementById('proto-view').textContent = bundle.proto;
       document.getElementById('status-badge').textContent =
@@ -320,6 +500,12 @@ const WEB_SHELL_HTML: &str = r#"<!doctype html>
         (bundle.overflows.length === 0 ? 'Layout OK' : (bundle.overflows.length + ' overflow(s)'));
       showErrorOverlay(bundle.last_error);
       renderStage();
+      if (!didInitRoot || resetSignals) {
+        didInitRoot = true;
+        for (const n of bundle.program.nodes) {
+          if (n.kind?.node_type === 'ui') runNodeEvent(n.kind, 'init', null);
+        }
+      }
     }
 
     async function triggerHotReload() {

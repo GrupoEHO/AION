@@ -2,11 +2,13 @@ pub mod ast;
 pub mod diagnostic;
 pub mod patch;
 pub mod types;
+pub mod unparse;
 
 pub use ast::*;
 pub use diagnostic::*;
 pub use patch::*;
 pub use types::*;
+pub use unparse::*;
 
 #[cfg(test)]
 mod tests {
@@ -45,6 +47,7 @@ mod tests {
                     kind: ExprKind::Int(0),
                     span: Span::default(),
                 },
+                persist: false,
             }),
         };
         let n0 = FlatNode {

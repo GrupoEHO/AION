@@ -168,8 +168,11 @@ aion check examples/promg_web_demo.aion
 # Output the flat AST as JSON
 aion parse examples/promg_web_demo.aion
 
-# Apply transactional differential patches (ADD/PATCH/DEL) and validate
-aion patch app.aion patch.json
+# Canonically format an .aion file from the AST
+aion fmt app.aion --write
+
+# Apply transactional differential patches (ADD/PATCH/DEL), validate, and write back
+aion patch app.aion patch.json --write
 
 # Launch live interactive Web Preview + HTTP/Protobuf backend on http://127.0.0.1:8080
 aion web examples/promg_web_demo.aion

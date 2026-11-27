@@ -870,6 +870,7 @@ final class AionStore: ObservableObject {
     @Published var toastMessage: String? = nil
     @Published var loadError: String? = nil
 
+    var persistedSignals: Set<String> = []
     var apiBaseUrl: String = "http://127.0.0.1:8080"
     var viewportWidth: CGFloat = 390
     var viewportHeight: CGFloat = 844
@@ -904,7 +905,15 @@ final class AionStore: ObservableObject {
                 guard let nid = n["id"] as? String,
                       let kind = n["kind"] as? [String: Any] else { continue }
                 nodeMap[nid] = kind
-                if (kind["node_type"] as? String) == "ui" {
+                let nt = kind["node_type"] as? String ?? ""
+                if nt == "signal", (kind["persist"] as? Bool) == true {
+                    persistedSignals.insert(nid)
+                    if let savedStr = UserDefaults.standard.string(forKey: "aion_persist:" + nid),
+                       let savedData = savedStr.data(using: .utf8),
+                       let savedVal = try? JSONSerialization.jsonObject(with: savedData, options: .fragmentsAllowed) {
+                        signals[nid] = savedVal
+                    }
+                } else if nt == "ui" {
                     let widget = kind["widget"] as? String ?? ""
                     let args = kind["args"] as? [[String: Any]] ?? []
                     if widget == "ROOT" {
@@ -951,13 +960,40 @@ final class AionStore: ObservableObject {
                 }
             }
         }
+
+        for (_, kind) in nodeMap where (kind["node_type"] as? String) == "ui" {
+            runNodeEvent(kind, eventName: "init", item: nil, index: nil)
+        }
+    }
+
+    func savePersistedSignals() {
+        for id in persistedSignals {
+            guard let val = signals[id] else { continue }
+            if let data = try? JSONSerialization.data(withJSONObject: val, options: .fragmentsAllowed),
+               let str = String(data: data, encoding: .utf8) {
+                UserDefaults.standard.set(str, forKey: "aion_persist:" + id)
+            }
+        }
+    }
+
+    func dynamicListSignal(_ ui: [String: Any]) -> String? {
+        guard (ui["widget"] as? String) == "LIST",
+              let args = ui["args"] as? [[String: Any]] else { return nil }
+        for a in args where (a["arg_kind"] as? String) == "node_ref" {
+            return a["value"] as? String
+        }
+        return nil
     }
 
     func isNodeVisible(_ id: String) -> Bool {
         var cur: String? = id
         while let c = cur, let p = parentMap[c] {
-            if let pUi = nodeMap[p], (pUi["widget"] as? String) == "ROUTER" {
-                if let active = activeScreens[p], active != c {
+            if let pUi = nodeMap[p] {
+                if dynamicListSignal(pUi) != nil {
+                    return false
+                }
+                if (pUi["widget"] as? String) == "ROUTER",
+                   let active = activeScreens[p], active != c {
                     return false
                 }
             }
@@ -975,18 +1011,28 @@ final class AionStore: ObservableObject {
                   let children = body["value"] as? [String] else { continue }
             if children.contains(targetId) {
                 activeScreens[routerId] = targetId
+                if let screenUi = nodeMap[targetId] {
+                    runNodeEvent(screenUi, eventName: "init", item: nil, index: nil)
+                }
                 return
             }
         }
     }
 
-    func resolveText(_ template: String) -> String {
+    func resolveText(_ template: String, item: Any? = nil) -> String {
         var out = template
         for (k, v) in signals {
             let token = "{\(k)}"
             if out.contains(token) {
                 out = out.replacingOccurrences(of: token, with: stringifyValue(v))
             }
+        }
+        if let dict = item as? [String: Any] {
+            for (fk, fv) in dict {
+                out = out.replacingOccurrences(of: "{item.\(fk)}", with: stringifyValue(fv))
+            }
+        } else if let item = item {
+            out = out.replacingOccurrences(of: "{item}", with: stringifyValue(item))
         }
         return out
     }
@@ -998,12 +1044,17 @@ final class AionStore: ObservableObject {
 
     func setSignal(_ id: String, value: Any) {
         signals[id] = value
+        savePersistedSignals()
     }
 
     func handleNodeClick(_ ui: [String: Any]) {
+        runNodeEvent(ui, eventName: "tap", item: nil, index: nil)
+    }
+
+    func runNodeEvent(_ ui: [String: Any], eventName: String, item: Any?, index: Int?) {
         guard let events = ui["events"] as? [[String: Any]],
-              let tap = events.first(where: { ($0["trigger"] as? String) == "tap" }),
-              let act = tap["action"] as? [String: Any] else { return }
+              let handler = events.first(where: { ($0["event"] as? String) == eventName }),
+              let act = handler["action"] as? [String: Any] else { return }
 
         let actKind = act["action_kind"] as? String ?? ""
         if actKind == "generic" {
@@ -1015,17 +1066,38 @@ final class AionStore: ObservableObject {
                 navigateTo(target)
                 return
             }
-            if name == "SET", actArgs.count >= 2,
+            if name == "PUSH", actArgs.count >= 2,
                let firstKind = actArgs[0]["kind"] as? [String: Any],
                let sigId = firstKind["value"] as? String {
-                let val = evalExpr(actArgs[1], res: nil)
-                signals[sigId] = val
+                var cur = (signals[sigId] as? [Any]) ?? []
+                cur.append(evalExpr(actArgs[1], res: nil, item: item, index: index))
+                signals[sigId] = cur
+                savePersistedSignals()
                 return
             }
-            if name == "TOAST", let first = actArgs.first {
-                showToast(stringifyValue(evalExpr(first, res: nil)))
+            if name == "REMOVE", actArgs.count >= 2,
+               let firstKind = actArgs[0]["kind"] as? [String: Any],
+               let sigId = firstKind["value"] as? String {
+                var cur = (signals[sigId] as? [Any]) ?? []
+                let targetVal = evalExpr(actArgs[1], res: nil, item: item, index: index)
+                if let idx = (targetVal as? NSNumber)?.intValue, idx >= 0, idx < cur.count {
+                    cur.remove(at: idx)
+                } else if let i = index, i >= 0, i < cur.count {
+                    cur.remove(at: i)
+                }
+                signals[sigId] = cur
+                savePersistedSignals()
                 return
             }
+            return
+        }
+        if actKind == "set", let sigId = act["signal"] as? String {
+            signals[sigId] = evalExpr(act["value"] as? [String: Any], res: nil, item: item, index: index)
+            savePersistedSignals()
+            return
+        }
+        if actKind == "toast" {
+            showToast(stringifyValue(evalExpr(act["message"] as? [String: Any], res: nil, item: item, index: index)))
             return
         }
 
@@ -1035,7 +1107,7 @@ final class AionStore: ObservableObject {
 
         let method = (apiNode["method"] as? String ?? "POST").uppercased()
         let path = apiNode["path"] as? String ?? "/"
-        let payloadVal = evalExpr(act["payload"] as? [String: Any], res: nil)
+        let payloadVal = evalExpr(act["payload"] as? [String: Any], res: nil, item: item, index: index)
         let base = apiBaseUrl.hasSuffix("/") ? String(apiBaseUrl.dropLast()) : apiBaseUrl
         guard let url = URL(string: base + path) else {
             triggerErr(events: events, fallback: "Invalid URL")
@@ -1053,7 +1125,7 @@ final class AionStore: ObservableObject {
             req.httpBody = bodyData
         }
 
-        let assigns = act["assigns"] as? [[String: Any]] ?? []
+        let bindDict = act["bind"] as? [String: Any]
         URLSession.shared.dataTask(with: req) { [weak self] data, response, error in
             DispatchQueue.main.async {
                 guard let self = self else { return }
@@ -1070,22 +1142,22 @@ final class AionStore: ObservableObject {
                 if let data = data, let json = try? JSONSerialization.jsonObject(with: data) {
                     parsedRes = json
                 }
-                for assign in assigns {
-                    if let target = assign["target"] as? String,
-                       let expr = assign["value"] as? [String: Any] {
-                        self.signals[target] = self.evalExpr(expr, res: parsedRes)
-                    }
+                if let bind = bindDict,
+                   let target = bind["signal"] as? String,
+                   let expr = bind["value"] as? [String: Any] {
+                    self.signals[target] = self.evalExpr(expr, res: parsedRes, item: item, index: index)
+                    self.savePersistedSignals()
                 }
             }
         }.resume()
     }
 
     private func triggerErr(events: [[String: Any]], fallback: String) {
-        if let errEv = events.first(where: { ($0["trigger"] as? String) == "err" }),
+        if let errEv = events.first(where: { ($0["event"] as? String) == "err" }),
            let act = errEv["action"] as? [String: Any],
-           let actArgs = act["args"] as? [[String: Any]],
-           let first = actArgs.first {
-            showToast(stringifyValue(evalExpr(first, res: nil)))
+           (act["action_kind"] as? String) == "toast",
+           let msgExpr = act["message"] as? [String: Any] {
+            showToast(stringifyValue(evalExpr(msgExpr, res: nil, item: nil, index: nil)))
         } else {
             showToast(fallback)
         }
@@ -1100,7 +1172,7 @@ final class AionStore: ObservableObject {
         }
     }
 
-    private func evalExpr(_ expr: [String: Any]?, res: Any?) -> Any {
+    private func evalExpr(_ expr: [String: Any]?, res: Any?, item: Any?, index: Int?) -> Any {
         guard let expr = expr, let kind = expr["kind"] as? [String: Any] else { return "" }
         let ek = kind["expr_kind"] as? String ?? ""
         switch ek {
@@ -1112,13 +1184,14 @@ final class AionStore: ObservableObject {
             }
             return ""
         case "ident":
-            if (kind["value"] as? String) == "res" {
-                return res ?? [:]
-            }
-            return kind["value"] ?? ""
-        case "field_access":
+            let name = kind["value"] as? String ?? ""
+            if name == "res" { return res ?? [:] }
+            if name == "item" { return item ?? [:] }
+            if name == "index" { return index ?? 0 }
+            return name
+        case "member":
             if let val = kind["value"] as? [String: Any],
-               let obj = evalExpr(val["object"] as? [String: Any], res: res) as? [String: Any],
+               let obj = evalExpr(val["object"] as? [String: Any], res: res, item: item, index: index) as? [String: Any],
                let field = val["field"] as? String {
                 return obj[field] ?? ""
             }
@@ -1128,7 +1201,7 @@ final class AionStore: ObservableObject {
             if let pairs = kind["value"] as? [[Any]] {
                 for pair in pairs where pair.count == 2 {
                     if let k = pair[0] as? String, let v = pair[1] as? [String: Any] {
-                        out[k] = evalExpr(v, res: res)
+                        out[k] = evalExpr(v, res: res, item: item, index: index)
                     }
                 }
             }
@@ -1279,8 +1352,74 @@ struct AionNodeView: View {
                 .foregroundColor(Color(aionHex: colorHex))
                 .lineLimit(1)
                 .allowsHitTesting(false)
+        case "LIST":
+            if let sigId = store.dynamicListSignal(ui),
+               let items = store.signals[sigId] as? [Any],
+               let children = bodyDict?["value"] as? [String],
+               let tplId = children.first {
+                ScrollView {
+                    VStack(spacing: store.argFloat(args, 1, 8) * scale) {
+                        ForEach(Array(items.enumerated()), id: \.offset) { idx, elem in
+                            AionDynamicRowView(store: store, tplId: tplId, item: elem, index: idx, scale: scale)
+                        }
+                    }
+                }
+            } else {
+                Color.clear
+            }
         default:
             Color.clear
+        }
+    }
+}
+
+struct AionDynamicRowView: View {
+    @ObservedObject var store: AionStore
+    let tplId: String
+    let item: Any
+    let index: Int
+    let scale: CGFloat
+
+    var body: some View {
+        let ui = store.nodeMap[tplId] ?? [:]
+        let widget = ui["widget"] as? String ?? ""
+        let args = ui["args"] as? [[String: Any]] ?? []
+        let bodyDict = ui["body"] as? [String: Any]
+        let children = (bodyDict?["value"] as? [String]) ?? []
+
+        if widget == "TXT" {
+            let fs = store.argFloat(args, 0, 14) * scale
+            let w = Int(store.argFloat(args, 1, 400))
+            let hex = store.argString(args, 2, "#0F172A")
+            let tpl = ((bodyDict?["value"] as? [String: Any])?["template"] as? String) ?? ""
+            Text(store.resolveText(tpl, item: item))
+                .font(.system(size: fs, weight: w >= 600 ? .bold : .regular))
+                .foregroundColor(Color(aionHex: hex))
+        } else if widget == "BTN" {
+            let bw = store.argFloat(args, 0, 80) * scale
+            let bh = store.argFloat(args, 1, 32) * scale
+            let r = store.argFloat(args, 2, 6) * scale
+            let bg = store.argString(args, 3, "#2563EB")
+            Button(action: { store.runNodeEvent(ui, eventName: "tap", item: item, index: index) }) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: r).fill(Color(aionHex: bg))
+                    if let first = children.first {
+                        AionDynamicRowView(store: store, tplId: first, item: item, index: index, scale: scale)
+                    }
+                }
+                .frame(width: bw, height: bh)
+            }
+            .buttonStyle(.plain)
+        } else {
+            HStack {
+                ForEach(Array(children.enumerated()), id: \.offset) { idx, chId in
+                    AionDynamicRowView(store: store, tplId: chId, item: item, index: index, scale: scale)
+                    if idx == 0 && children.count > 1 { Spacer() }
+                }
+            }
+            .padding(.horizontal, 10 * scale)
+            .padding(.vertical, 8 * scale)
+            .background(RoundedRectangle(cornerRadius: 8 * scale).fill(Color.white))
         }
     }
 }

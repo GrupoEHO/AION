@@ -198,4 +198,49 @@ mod tests {
         assert!(diag["message"].as_str().unwrap().contains("mobile"));
         assert!(diag["fix_hint"].as_str().unwrap().contains("390"));
     }
+
+    #[test]
+    fn validates_semantic_ids_persist_init_and_dynamic_list_with_push_remove() {
+        let src = r#"
+#SRV0:HTTP[port:8080, proto:on]
+#M_Gasto:Gasto{concepto:str, monto:f64}
+#API_list:#SRV0.GET["/v1/gastos"] OUT{list<#M_Gasto>} {
+  [] -> RET
+}
+#S_concepto:str=""
+#S_gastos:list<#M_Gasto>=[{concepto:"Renta", monto:8500.0}] @persist
+
+#N_root:ROOT[16,16,100%,100%,#F8FAFC]{#N_main} @init->CALL(#API_list,{})=>#S_gastos=res @err->TOAST("Error cargando")
+#N_main:FLEX[v,s,st,12]{#N_inp,#N_add,#N_list}
+#N_inp:INP[280,44,8,#FFFFFF,#S_concepto]{"Concepto..."}
+#N_add:BTN[180,44,8,#2563EB]{#N_add_txt} @tap->PUSH(#S_gastos,{concepto:#S_concepto, monto:150.0})
+#N_add_txt:TXT[14,600,#FFFFFF]{"Agregar"}
+#N_list:LIST[v,8,#S_gastos]{#N_row}
+#N_row:FLEX[h,sb,c,8]{#N_item_lbl,#N_del}
+#N_item_lbl:TXT[14,500,#0F172A]{"{item.concepto}: ${item.monto}"}
+#N_del:BTN[80,32,6,#DC2626]{#N_del_txt} @tap->REMOVE(#S_gastos,index)
+#N_del_txt:TXT[12,600,#FFFFFF]{"Borrar"}
+"#;
+        let prog = parse_program(src).expect("should parse v0.2 features");
+        let reg = mock_registry();
+        let report = check_program(&prog, &reg);
+        assert!(
+            report.ok,
+            "expected zero errors, got: {}",
+            report.to_json_pretty().unwrap()
+        );
+
+        // Round-trip canonical unparser test
+        let formatted = aion_ast::format_program(&prog);
+        let reparsed = parse_program(&formatted).expect("formatted output must re-parse cleanly");
+        let report2 = check_program(&reparsed, &reg);
+        assert!(report2.ok, "reparsed program must pass static checker");
+
+        // Typo in `{item.inexistente}` must trigger E_UNKNOWN_FIELD
+        let bad = src.replace("{item.monto}", "{item.inexistente}");
+        let bad_prog = parse_program(&bad).expect("should parse");
+        let bad_report = check_program(&bad_prog, &reg);
+        assert!(!bad_report.ok);
+        assert_eq!(bad_report.diagnostics[0].code, "E_UNKNOWN_FIELD");
+    }
 }

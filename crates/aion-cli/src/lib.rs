@@ -201,10 +201,12 @@ pub fn cmd_patch(
         Ok(patch_report) => {
             let check_report = check_program(&prog, registry);
             let ok = check_report.ok;
+            let formatted_source = aion_ast::format_program(&prog);
             let out = serde_json::to_string_pretty(&json!({
                 "ok": ok,
                 "patch_report": patch_report,
                 "check_report": check_report,
+                "formatted_source": formatted_source,
                 "program": prog
             }))
             .unwrap();

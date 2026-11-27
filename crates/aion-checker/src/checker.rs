@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use aion_ast::{
     AionType, ApiNode, ApiOutput, BinaryOp, Diagnostic, DiagnosticReport, EventAction, Expr,
     ExprKind, ExtNode, FlowControl, ModelNode, MwNode, NodeId, NodeKind, NodePrefix, Phase,
-    Program, SignalNode, Span, SrvNode, Stmt, UiBody, UiNode,
+    Program, SignalNode, Span, SrvNode, Stmt, UiArg, UiBody, UiNode,
 };
 use aion_ext::{ExtManifest, ExtRegistry};
 
@@ -309,30 +309,122 @@ impl<'a> Checker<'a> {
     fn check_signals(&mut self) {
         for node in &self.program.nodes {
             if let NodeKind::Signal(sig) = &node.kind {
-                let mut locals = HashMap::new();
-                let init_ty = self.eval_expr(node.id.as_str(), &sig.init, &locals, None);
-                let _ = &mut locals;
-                if init_ty != AionType::Unknown && !init_ty.is_assignable_to(&sig.ty) {
-                    self.diagnostics.push(
-                        Diagnostic::error(
-                            "E_TYPE_MISMATCH",
-                            Phase::Checker,
-                            format!(
-                                "signal `{}` expects initializer of type `{}`, found `{}`",
-                                node.id, sig.ty, init_ty
-                            ),
-                            sig.init.span,
-                        )
-                        .with_node_id(node.id.as_str())
-                        .with_expected(sig.ty.to_string())
-                        .with_found(init_ty.to_string())
-                        .with_fix_hint(format!(
-                            "Change `{}` initializer to match `{}` or update the signal type.",
-                            node.id, sig.ty
-                        )),
-                    );
+                let locals = HashMap::new();
+                if !self.check_expr_compatible(node.id.as_str(), &sig.init, &sig.ty, &locals) {
+                    let init_ty = self.eval_expr(node.id.as_str(), &sig.init, &locals, None);
+                    if init_ty != AionType::Unknown && !init_ty.is_assignable_to(&sig.ty) {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                "E_TYPE_MISMATCH",
+                                Phase::Checker,
+                                format!(
+                                    "signal `{}` expects initializer of type `{}`, found `{}`",
+                                    node.id, sig.ty, init_ty
+                                ),
+                                sig.init.span,
+                            )
+                            .with_node_id(node.id.as_str())
+                            .with_expected(sig.ty.to_string())
+                            .with_found(init_ty.to_string())
+                            .with_fix_hint(format!(
+                                "Change `{}` initializer to match `{}` or update the signal type.",
+                                node.id, sig.ty
+                            )),
+                        );
+                    }
                 }
             }
+        }
+    }
+
+    /// Validates `expr` against `expected` including structural object-literal matching against `#M` models.
+    /// Returns `true` if `expr` was structurally validated (either valid or already emitted specific field errors).
+    fn check_expr_compatible(
+        &mut self,
+        node_id: &str,
+        expr: &Expr,
+        expected: &AionType,
+        locals: &HashMap<String, AionType>,
+    ) -> bool {
+        match (&expr.kind, expected) {
+            (ExprKind::List(items), AionType::List(elem_expected)) => {
+                if items.is_empty() {
+                    return true;
+                }
+                for item in items {
+                    if !self.check_expr_compatible(node_id, item, elem_expected, locals) {
+                        let actual = self.eval_expr(node_id, item, locals, None);
+                        if actual != AionType::Unknown && !actual.is_assignable_to(elem_expected) {
+                            self.diagnostics.push(
+                                Diagnostic::error(
+                                    "E_TYPE_MISMATCH",
+                                    Phase::Checker,
+                                    format!(
+                                        "list element in `{node_id}` expects `{elem_expected}`, found `{actual}`"
+                                    ),
+                                    item.span,
+                                )
+                                .with_node_id(node_id)
+                                .with_expected(elem_expected.to_string())
+                                .with_found(actual.to_string()),
+                            );
+                        }
+                    }
+                }
+                true
+            }
+            (ExprKind::Object(entries), AionType::ModelRef(model_id)) => {
+                let Some((model, _)) = self.models.get(model_id).copied() else {
+                    return false;
+                };
+                let known: Vec<&str> = model.fields.iter().map(|f| f.name.as_str()).collect();
+                for (k, v) in entries {
+                    if let Some(fdef) = model.fields.iter().find(|f| &f.name == k) {
+                        if !self.check_expr_compatible(node_id, v, &fdef.ty, locals) {
+                            let actual = self.eval_expr(node_id, v, locals, None);
+                            if actual != AionType::Unknown && !actual.is_assignable_to(&fdef.ty) {
+                                self.diagnostics.push(
+                                    Diagnostic::error(
+                                        "E_TYPE_MISMATCH",
+                                        Phase::Checker,
+                                        format!(
+                                            "field `{k}` on model `{}` ({model_id}) expects `{}`, found `{actual}`",
+                                            model.name, fdef.ty
+                                        ),
+                                        v.span,
+                                    )
+                                    .with_node_id(node_id)
+                                    .with_expected(fdef.ty.to_string())
+                                    .with_found(actual.to_string()),
+                                );
+                            }
+                        }
+                    } else {
+                        let _ = self.eval_expr(node_id, v, locals, None);
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                "E_UNKNOWN_FIELD",
+                                Phase::Checker,
+                                format!(
+                                    "object literal for model `{}` ({model_id}) has unknown field `{k}`",
+                                    model.name
+                                ),
+                                v.span,
+                            )
+                            .with_node_id(node_id)
+                            .with_expected(known.join(", "))
+                            .with_found(k.clone())
+                            .with_fix_hint(format!(
+                                "Valid fields on `{}` ({model_id}): {}.",
+                                model.name,
+                                known.join(", ")
+                            )),
+                        );
+                    }
+                }
+                true
+            }
+            _ => false,
         }
     }
 
@@ -444,9 +536,187 @@ impl<'a> Checker<'a> {
         }
     }
 
+    fn collect_list_item_scopes(&mut self) -> HashMap<NodeId, AionType> {
+        let mut item_scopes: HashMap<NodeId, AionType> = HashMap::new();
+
+        fn propagate(
+            id: &NodeId,
+            elem_ty: &AionType,
+            uis: &HashMap<NodeId, (&UiNode, Span)>,
+            out: &mut HashMap<NodeId, AionType>,
+            visited: &mut HashSet<NodeId>,
+        ) {
+            if !visited.insert(id.clone()) {
+                return;
+            }
+            out.insert(id.clone(), elem_ty.clone());
+            if let Some((ui, _)) = uis.get(id) {
+                // Stop if nested LIST defines its own data source
+                let own_list_sig = ui.widget == "LIST"
+                    && ui
+                        .args
+                        .iter()
+                        .any(|a| matches!(a, UiArg::NodeRef(r) if r.prefix() == Some(NodePrefix::Signal)));
+                if !own_list_sig {
+                    if let UiBody::Children(children) = &ui.body {
+                        for ch in children {
+                            propagate(ch, elem_ty, uis, out, visited);
+                        }
+                    }
+                }
+            }
+        }
+
+        let list_bindings: Vec<(NodeId, Span, NodeId, Vec<NodeId>)> = self
+            .program
+            .nodes
+            .iter()
+            .filter_map(|n| {
+                let NodeKind::Ui(ui) = &n.kind else {
+                    return None;
+                };
+                if ui.widget != "LIST" {
+                    return None;
+                }
+                let sig_id = ui.args.iter().find_map(|a| match a {
+                    UiArg::NodeRef(id) => Some(id.clone()),
+                    _ => None,
+                })?;
+                let children = match &ui.body {
+                    UiBody::Children(ch) => ch.clone(),
+                    _ => Vec::new(),
+                };
+                Some((n.id.clone(), n.span, sig_id, children))
+            })
+            .collect();
+
+        for (list_id, span, sig_id, children) in list_bindings {
+            match self.signals.get(&sig_id).copied() {
+                Some((sig, _)) => match &sig.ty {
+                    AionType::List(elem_ty) => {
+                        let mut visited = HashSet::new();
+                        for ch in &children {
+                            propagate(ch, elem_ty, &self.uis, &mut item_scopes, &mut visited);
+                        }
+                    }
+                    other => {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                "E_TYPE_MISMATCH",
+                                Phase::Checker,
+                                format!(
+                                    "dynamic `LIST` `{list_id}` requires a `list<T>` signal, but `{sig_id}` has type `{other}`"
+                                ),
+                                span,
+                            )
+                            .with_node_id(list_id.as_str())
+                            .with_expected("list<T>")
+                            .with_found(other.to_string()),
+                        );
+                    }
+                },
+                None => {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            "E_UNKNOWN_NODE",
+                            Phase::Checker,
+                            format!(
+                                "dynamic `LIST` `{list_id}` references undefined signal `{sig_id}`"
+                            ),
+                            span,
+                        )
+                        .with_node_id(list_id.as_str())
+                        .with_fix_hint(format!(
+                            "Declare `{sig_id}:list<#M0>=[]` before referencing it in `{list_id}`."
+                        )),
+                    );
+                }
+            }
+        }
+
+        item_scopes
+    }
+
+    fn check_item_template_interpolations(
+        &mut self,
+        node_id: &NodeId,
+        template: &str,
+        item_ty: Option<&AionType>,
+        span: Span,
+    ) {
+        let mut rest = template;
+        while let Some(open) = rest.find("{item") {
+            let after = &rest[open + 1..];
+            let Some(close) = after.find('}') else {
+                break;
+            };
+            let expr_str = after[..close].trim();
+            rest = &after[close + 1..];
+
+            if expr_str != "item" && !expr_str.starts_with("item.") {
+                continue;
+            }
+            let Some(elem_ty) = item_ty else {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        "E_UNKNOWN_IDENT",
+                        Phase::Checker,
+                        format!(
+                            "UI node `{node_id}` uses `{{{expr_str}}}` outside of a dynamic `LIST[..., #S_list]`"
+                        ),
+                        span,
+                    )
+                    .with_node_id(node_id.as_str())
+                    .with_fix_hint(
+                        "Place this node inside a `LIST[v, 8, #S_items]{...}` bound to a `list<T>` signal.",
+                    ),
+                );
+                continue;
+            };
+
+            if let Some(field) = expr_str.strip_prefix("item.") {
+                if let AionType::ModelRef(model_id) = elem_ty {
+                    if let Some((model, _)) = self.models.get(model_id) {
+                        if !model.fields.iter().any(|f| f.name == field) {
+                            let known: Vec<&str> =
+                                model.fields.iter().map(|f| f.name.as_str()).collect();
+                            self.diagnostics.push(
+                                Diagnostic::error(
+                                    "E_UNKNOWN_FIELD",
+                                    Phase::Checker,
+                                    format!(
+                                        "UI template `{{item.{field}}}` in `{node_id}` references unknown field `{field}` on `{}` ({model_id})",
+                                        model.name
+                                    ),
+                                    span,
+                                )
+                                .with_node_id(node_id.as_str())
+                                .with_expected(known.join(", "))
+                                .with_found(field.to_string())
+                                .with_fix_hint(format!(
+                                    "Available fields on `{}`: {}.",
+                                    model.name,
+                                    known.join(", ")
+                                )),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     fn check_ui_nodes(&mut self) {
+        let item_scopes = self.collect_list_item_scopes();
+
         for node in &self.program.nodes {
             if let NodeKind::Ui(ui) = &node.kind {
+                let mut ui_locals: HashMap<String, AionType> = HashMap::new();
+                if let Some(elem_ty) = item_scopes.get(&node.id) {
+                    ui_locals.insert("item".to_string(), elem_ty.clone());
+                    ui_locals.insert("index".to_string(), AionType::I32);
+                }
+
                 match &ui.body {
                     UiBody::Children(children) => {
                         for child in children {
@@ -473,7 +743,10 @@ impl<'a> Checker<'a> {
                             }
                         }
                     }
-                    UiBody::Text { interpolations, .. } => {
+                    UiBody::Text {
+                        template,
+                        interpolations,
+                    } => {
                         for sig_id in interpolations {
                             if !self.signals.contains_key(sig_id) {
                                 self.diagnostics.push(
@@ -493,6 +766,12 @@ impl<'a> Checker<'a> {
                                 );
                             }
                         }
+                        self.check_item_template_interpolations(
+                            &node.id,
+                            template,
+                            item_scopes.get(&node.id),
+                            node.span,
+                        );
                     }
                     UiBody::Empty => {}
                 }
@@ -529,6 +808,7 @@ impl<'a> Checker<'a> {
                                     api,
                                     api_node,
                                     payload,
+                                    &ui_locals,
                                 );
                                 if let Some(assign) = bind {
                                     self.check_api_bind(
@@ -537,6 +817,7 @@ impl<'a> Checker<'a> {
                                         &assign.signal,
                                         &assign.value,
                                         assign.span,
+                                        &ui_locals,
                                     );
                                 }
                             } else {
@@ -559,27 +840,36 @@ impl<'a> Checker<'a> {
                         }
                         EventAction::Set { signal, value } => {
                             if let Some((sig, _)) = self.signals.get(signal).copied() {
-                                let val_ty = self.eval_expr(
+                                if !self.check_expr_compatible(
                                     node.id.as_str(),
                                     value,
-                                    &HashMap::new(),
-                                    None,
-                                );
-                                if val_ty != AionType::Unknown && !val_ty.is_assignable_to(&sig.ty) {
-                                    self.diagnostics.push(
-                                        Diagnostic::error(
-                                            "E_TYPE_MISMATCH",
-                                            Phase::Checker,
-                                            format!(
-                                                "cannot assign `{val_ty}` to signal `{signal}` of type `{}`",
-                                                sig.ty
-                                            ),
-                                            handler.span,
-                                        )
-                                        .with_node_id(node.id.as_str())
-                                        .with_expected(sig.ty.to_string())
-                                        .with_found(val_ty.to_string()),
+                                    &sig.ty,
+                                    &ui_locals,
+                                ) {
+                                    let val_ty = self.eval_expr(
+                                        node.id.as_str(),
+                                        value,
+                                        &ui_locals,
+                                        None,
                                     );
+                                    if val_ty != AionType::Unknown
+                                        && !val_ty.is_assignable_to(&sig.ty)
+                                    {
+                                        self.diagnostics.push(
+                                            Diagnostic::error(
+                                                "E_TYPE_MISMATCH",
+                                                Phase::Checker,
+                                                format!(
+                                                    "cannot assign `{val_ty}` to signal `{signal}` of type `{}`",
+                                                    sig.ty
+                                                ),
+                                                handler.span,
+                                            )
+                                            .with_node_id(node.id.as_str())
+                                            .with_expected(sig.ty.to_string())
+                                            .with_found(val_ty.to_string()),
+                                        );
+                                    }
                                 }
                             } else {
                                 self.diagnostics.push(
@@ -600,7 +890,7 @@ impl<'a> Checker<'a> {
                             let msg_ty = self.eval_expr(
                                 node.id.as_str(),
                                 message,
-                                &HashMap::new(),
+                                &ui_locals,
                                 None,
                             );
                             if msg_ty != AionType::Unknown && !msg_ty.is_assignable_to(&AionType::Str)
@@ -618,8 +908,172 @@ impl<'a> Checker<'a> {
                                 );
                             }
                         }
-                        EventAction::Generic { .. } => {}
+                        EventAction::Generic { name, args } => {
+                            self.check_generic_ui_action(
+                                node.id.as_str(),
+                                name,
+                                args,
+                                handler.span,
+                                &ui_locals,
+                            );
+                        }
                     }
+                }
+            }
+        }
+    }
+
+    fn check_generic_ui_action(
+        &mut self,
+        node_id: &str,
+        name: &str,
+        args: &[Expr],
+        span: Span,
+        ui_locals: &HashMap<String, AionType>,
+    ) {
+        match name {
+            "NAV" => {
+                if let Some(first) = args.first() {
+                    if let ExprKind::NodeRef(target) = &first.kind {
+                        if !self.uis.contains_key(target) {
+                            self.diagnostics.push(
+                                Diagnostic::error(
+                                    "E_UNKNOWN_NODE",
+                                    Phase::Checker,
+                                    format!("NAV in `{node_id}` targets undefined UI screen `{target}`"),
+                                    first.span,
+                                )
+                                .with_node_id(node_id)
+                                .with_fix_hint(format!(
+                                    "Declare `{target}` as a `#N` screen inside a `ROUTER`."
+                                )),
+                            );
+                        }
+                    }
+                } else {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            "E_ARG_COUNT",
+                            Phase::Checker,
+                            format!("`NAV` in `{node_id}` expects 1 screen node argument"),
+                            span,
+                        )
+                        .with_node_id(node_id)
+                        .with_expected("NAV(#N_screen)"),
+                    );
+                }
+            }
+            "PUSH" => {
+                if args.len() != 2 {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            "E_ARG_COUNT",
+                            Phase::Checker,
+                            format!("`PUSH` in `{node_id}` expects 2 arguments `(#S_list, item)`"),
+                            span,
+                        )
+                        .with_node_id(node_id)
+                        .with_expected("PUSH(#S_list, value)"),
+                    );
+                    return;
+                }
+                if let ExprKind::NodeRef(sig_id) = &args[0].kind {
+                    if let Some((sig, _)) = self.signals.get(sig_id).copied() {
+                        if let AionType::List(elem_ty) = &sig.ty {
+                            if !self.check_expr_compatible(node_id, &args[1], elem_ty, ui_locals) {
+                                let actual = self.eval_expr(node_id, &args[1], ui_locals, None);
+                                if actual != AionType::Unknown && !actual.is_assignable_to(elem_ty) {
+                                    self.diagnostics.push(
+                                        Diagnostic::error(
+                                            "E_TYPE_MISMATCH",
+                                            Phase::Checker,
+                                            format!(
+                                                "`PUSH({sig_id}, ...)` expects element of type `{elem_ty}`, found `{actual}`"
+                                            ),
+                                            args[1].span,
+                                        )
+                                        .with_node_id(node_id)
+                                        .with_expected(elem_ty.to_string())
+                                        .with_found(actual.to_string()),
+                                    );
+                                }
+                            }
+                        } else {
+                            self.diagnostics.push(
+                                Diagnostic::error(
+                                    "E_TYPE_MISMATCH",
+                                    Phase::Checker,
+                                    format!(
+                                        "`PUSH` target `{sig_id}` must be `list<T>`, found `{}`",
+                                        sig.ty
+                                    ),
+                                    args[0].span,
+                                )
+                                .with_node_id(node_id)
+                                .with_expected("list<T>")
+                                .with_found(sig.ty.to_string()),
+                            );
+                        }
+                    } else {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                "E_UNKNOWN_NODE",
+                                Phase::Checker,
+                                format!("`PUSH` in `{node_id}` references undefined signal `{sig_id}`"),
+                                args[0].span,
+                            )
+                            .with_node_id(node_id),
+                        );
+                    }
+                }
+            }
+            "REMOVE" => {
+                if args.len() != 2 {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            "E_ARG_COUNT",
+                            Phase::Checker,
+                            format!("`REMOVE` in `{node_id}` expects 2 arguments `(#S_list, index_or_item)`"),
+                            span,
+                        )
+                        .with_node_id(node_id)
+                        .with_expected("REMOVE(#S_list, index)"),
+                    );
+                    return;
+                }
+                if let ExprKind::NodeRef(sig_id) = &args[0].kind {
+                    if let Some((sig, _)) = self.signals.get(sig_id).copied() {
+                        if !matches!(sig.ty, AionType::List(_)) {
+                            self.diagnostics.push(
+                                Diagnostic::error(
+                                    "E_TYPE_MISMATCH",
+                                    Phase::Checker,
+                                    format!(
+                                        "`REMOVE` target `{sig_id}` must be `list<T>`, found `{}`",
+                                        sig.ty
+                                    ),
+                                    args[0].span,
+                                )
+                                .with_node_id(node_id),
+                            );
+                        }
+                    } else {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                "E_UNKNOWN_NODE",
+                                Phase::Checker,
+                                format!("`REMOVE` in `{node_id}` references undefined signal `{sig_id}`"),
+                                args[0].span,
+                            )
+                            .with_node_id(node_id),
+                        );
+                    }
+                }
+                let _ = self.eval_expr(node_id, &args[1], ui_locals, None);
+            }
+            _ => {
+                for a in args {
+                    let _ = self.eval_expr(node_id, a, ui_locals, None);
                 }
             }
         }
@@ -631,6 +1085,7 @@ impl<'a> Checker<'a> {
         api_id: &NodeId,
         api: &ApiNode,
         payload: &Expr,
+        ui_locals: &HashMap<String, AionType>,
     ) {
         if let ExprKind::Object(entries) = &payload.kind {
             let provided: HashMap<&str, &Expr> =
@@ -658,30 +1113,32 @@ impl<'a> Checker<'a> {
                         );
                     }
                     Some(val_expr) => {
-                        let actual_ty =
-                            self.eval_expr(node_id, val_expr, &HashMap::new(), None);
-                        if actual_ty != AionType::Unknown && !actual_ty.is_assignable_to(&field.ty)
-                        {
-                            self.diagnostics.push(
-                                Diagnostic::error(
-                                    "E_TYPE_MISMATCH",
-                                    Phase::Checker,
-                                    format!(
-                                        "CALL({api_id}, ...) field `{}` expects `{}`, found `{actual_ty}`",
-                                        field.name, field.ty
-                                    ),
-                                    val_expr.span,
-                                )
-                                .with_node_id(node_id)
-                                .with_expected(field.ty.to_string())
-                                .with_found(actual_ty.to_string()),
-                            );
+                        if !self.check_expr_compatible(node_id, val_expr, &field.ty, ui_locals) {
+                            let actual_ty =
+                                self.eval_expr(node_id, val_expr, ui_locals, None);
+                            if actual_ty != AionType::Unknown && !actual_ty.is_assignable_to(&field.ty)
+                            {
+                                self.diagnostics.push(
+                                    Diagnostic::error(
+                                        "E_TYPE_MISMATCH",
+                                        Phase::Checker,
+                                        format!(
+                                            "CALL({api_id}, ...) field `{}` expects `{}`, found `{actual_ty}`",
+                                            field.name, field.ty
+                                        ),
+                                        val_expr.span,
+                                    )
+                                    .with_node_id(node_id)
+                                    .with_expected(field.ty.to_string())
+                                    .with_found(actual_ty.to_string()),
+                                );
+                            }
                         }
                     }
                 }
             }
         } else {
-            let _ = self.eval_expr(node_id, payload, &HashMap::new(), None);
+            let _ = self.eval_expr(node_id, payload, ui_locals, None);
         }
     }
 
@@ -692,6 +1149,7 @@ impl<'a> Checker<'a> {
         signal_id: &NodeId,
         value_expr: &Expr,
         span: Span,
+        ui_locals: &HashMap<String, AionType>,
     ) {
         let Some((sig, _)) = self.signals.get(signal_id).copied() else {
             self.diagnostics.push(
@@ -709,7 +1167,7 @@ impl<'a> Checker<'a> {
             return;
         };
 
-        let mut scope = HashMap::new();
+        let mut scope = ui_locals.clone();
         let res_ty = match &api.output {
             Some(ApiOutput::ModelRef(id)) => AionType::ModelRef(id.clone()),
             Some(ApiOutput::Type(ty)) => ty.clone(),

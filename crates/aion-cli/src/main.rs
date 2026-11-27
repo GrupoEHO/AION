@@ -103,18 +103,62 @@ fn main() {
                 process::exit(1);
             }
         }
-        "patch" => {
-            if args.len() < 4 {
-                eprintln!("Usage: aion patch <file.aion> <patch.json> [--manifests-dir <dir>]");
+        "fmt" => {
+            if args.len() < 3 {
+                eprintln!("Usage: aion fmt <file.aion> [--write]");
                 process::exit(2);
             }
-            let src = read_file_or_exit(Path::new(&args[2]));
+            let target_file = Path::new(&args[2]);
+            let src = read_file_or_exit(target_file);
+            let prog = match parse_program(&src) {
+                Ok(p) => p,
+                Err(diags) => {
+                    let report = DiagnosticReport::from_diagnostics(diags);
+                    println!("{}", report.to_json_pretty().unwrap());
+                    process::exit(1);
+                }
+            };
+            let formatted = aion_ast::format_program(&prog);
+            if args.iter().any(|a| a == "--write" || a == "-w") {
+                if let Err(e) = fs::write(target_file, &formatted) {
+                    eprintln!("{{\"ok\":false,\"error\":\"failed to write {}: {}\"}}", target_file.display(), e);
+                    process::exit(1);
+                }
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": true,
+                        "file": target_file.display().to_string(),
+                        "bytes": formatted.len()
+                    }))
+                    .unwrap()
+                );
+            } else {
+                print!("{formatted}");
+            }
+        }
+        "patch" => {
+            if args.len() < 4 {
+                eprintln!("Usage: aion patch <file.aion> <patch.json> [--write] [--manifests-dir <dir>]");
+                process::exit(2);
+            }
+            let target_file = Path::new(&args[2]);
+            let src = read_file_or_exit(target_file);
             let patch_json = read_file_or_exit(Path::new(&args[3]));
             let reg = build_registry(Some(&manifests_dir)).unwrap_or_else(|e| {
                 eprintln!("{{\"ok\":false,\"error\":\"{e}\"}}");
                 process::exit(1);
             });
-            let (ok, out, _) = cmd_patch(&src, &patch_json, &reg);
+            let (ok, out, patched_prog) = cmd_patch(&src, &patch_json, &reg);
+            if ok && args.iter().any(|a| a == "--write" || a == "-w") {
+                if let Some(prog) = patched_prog {
+                    let formatted = aion_ast::format_program(&prog);
+                    if let Err(e) = fs::write(target_file, formatted) {
+                        eprintln!("{{\"ok\":false,\"error\":\"failed to write {}: {}\"}}", target_file.display(), e);
+                        process::exit(1);
+                    }
+                }
+            }
             println!("{out}");
             if !ok {
                 process::exit(1);

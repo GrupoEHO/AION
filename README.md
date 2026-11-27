@@ -174,8 +174,11 @@ aion check examples/promg_web_demo.aion
 # Ver el AST plano en JSON
 aion parse examples/promg_web_demo.aion
 
-# Aplicar parches diferenciales transaccionales (ADD/PATCH/DEL) y validar
-aion patch app.aion patch.json
+# Formatear canónicamente un archivo .aion desde el AST
+aion fmt app.aion --write
+
+# Aplicar parches diferenciales transaccionales (ADD/PATCH/DEL), validar y guardar
+aion patch app.aion patch.json --write
 
 # Levantar demo web interactiva + backend HTTP/Protobuf en http://127.0.0.1:8080
 aion web examples/promg_web_demo.aion

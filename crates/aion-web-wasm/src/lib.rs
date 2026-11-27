@@ -97,7 +97,14 @@ fn json_to_signal_value(jv: &serde_json::Value) -> SignalValue {
                 SignalValue::Null
             }
         }
-        other => SignalValue::Str(other.to_string()),
+        serde_json::Value::Array(arr) => {
+            SignalValue::List(arr.iter().map(json_to_signal_value).collect())
+        }
+        serde_json::Value::Object(obj) => SignalValue::Map(
+            obj.iter()
+                .map(|(k, v)| (k.clone(), json_to_signal_value(v)))
+                .collect(),
+        ),
     }
 }
 
@@ -117,6 +124,7 @@ mod tests {
                         kind: aion_ast::ExprKind::Int(0),
                         span: aion_ast::Span::default(),
                     },
+                    persist: false,
                 }),
             },
             aion_ast::FlatNode {

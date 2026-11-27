@@ -244,6 +244,8 @@ pub struct ApiNode {
 pub struct SignalNode {
     pub ty: AionType,
     pub init: Expr,
+    #[serde(default)]
+    pub persist: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

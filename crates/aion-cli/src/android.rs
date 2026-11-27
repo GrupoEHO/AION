@@ -508,6 +508,7 @@ fn generate_main_activity_java(package_name: &str) -> String {
         r##"package {package_name};
 
 import android.app.Activity;
+import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -523,11 +524,14 @@ import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
+import org.json.JSONTokener;
 
 import java.io.BufferedReader;
 import java.io.InputStream;
@@ -538,9 +542,11 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -553,11 +559,14 @@ public class MainActivity extends Activity {{
     private JSONObject bundle;
     private String apiBaseUrl = "http://10.0.2.2:8080";
     private final Map<String, Object> signals = new HashMap<>();
+    private final Set<String> persistedSignals = new HashSet<>();
     private final Map<String, JSONObject> nodeMap = new HashMap<>();
     private final Map<String, String> parentMap = new HashMap<>();
     private final Map<String, String> activeScreens = new HashMap<>();
     private final Map<String, View> viewMap = new HashMap<>();
     private final List<TextBinding> textBindings = new ArrayList<>();
+    private final List<Runnable> listUpdaters = new ArrayList<>();
+    private float currentScale = 1f;
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
@@ -587,12 +596,20 @@ public class MainActivity extends Activity {{
                 }}
             }}
 
+            SharedPreferences prefs = getSharedPreferences("aion_persist", MODE_PRIVATE);
             JSONArray nodes = bundle.getJSONObject("program").getJSONArray("nodes");
             for (int i = 0; i < nodes.length(); i++) {{
                 JSONObject n = nodes.getJSONObject(i);
                 String nid = n.getString("id");
                 JSONObject kind = n.getJSONObject("kind");
                 nodeMap.put(nid, kind);
+                if ("signal".equals(kind.optString("node_type")) && kind.optBoolean("persist", false)) {{
+                    persistedSignals.add(nid);
+                    String saved = prefs.getString(nid, null);
+                    if (saved != null) {{
+                        try {{ signals.put(nid, new JSONTokener(saved).nextValue()); }} catch (Exception ignored) {{}}
+                    }}
+                }}
                 if ("ui".equals(kind.optString("node_type")) && "ROUTER".equals(kind.optString("widget"))) {{
                     JSONArray args = kind.optJSONArray("args");
                     String initial = getStringArg(args, 0, null);
@@ -608,6 +625,11 @@ public class MainActivity extends Activity {{
             }}
 
             setContentView(renderStage());
+            for (JSONObject k : nodeMap.values()) {{
+                if ("ui".equals(k.optString("node_type"))) {{
+                    runNodeEvent(k, "init", null, -1);
+                }}
+            }}
         }} catch (Exception e) {{
             TextView err = new TextView(this);
             err.setText("AION runtime error: " + e.getMessage());
@@ -627,6 +649,7 @@ public class MainActivity extends Activity {{
         float scaleX = dm.widthPixels / (float) vp.getDouble("width");
         float scaleY = dm.heightPixels / (float) vp.getDouble("height");
         float scale = Math.min(scaleX, scaleY);
+        currentScale = scale;
 
         for (int i = 0; i < paintOrder.length(); i++) {{
             String id = paintOrder.getString(i);
@@ -667,6 +690,7 @@ public class MainActivity extends Activity {{
                         @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) {{}}
                         @Override public void onTextChanged(CharSequence s, int a, int b, int c) {{
                             signals.put(boundSig, s.toString());
+                            savePersistedSignals();
                             updateTexts();
                         }}
                         @Override public void afterTextChanged(Editable s) {{}}
@@ -685,9 +709,36 @@ public class MainActivity extends Activity {{
                 if (body != null && "text".equals(body.optString("body_kind"))) {{
                     String tpl = body.getJSONObject("value").optString("template", "");
                     textBindings.add(new TextBinding(txt, tpl));
-                    txt.setText(resolveText(tpl));
+                    txt.setText(resolveText(tpl, null));
                 }}
                 view = txt;
+            }} else if ("LIST".equals(widget) && getDynamicListSig(ui) != null) {{
+                String listSig = getDynamicListSig(ui);
+                ScrollView sv = new ScrollView(this);
+                LinearLayout ll = new LinearLayout(this);
+                ll.setOrientation(LinearLayout.VERTICAL);
+                sv.addView(ll);
+                String tplId = null;
+                if (body != null && "children".equals(body.optString("body_kind"))) {{
+                    JSONArray ch = body.optJSONArray("value");
+                    if (ch != null && ch.length() > 0) tplId = ch.optString(0, null);
+                }}
+                final String finalTplId = tplId;
+                Runnable populate = () -> {{
+                    ll.removeAllViews();
+                    Object raw = signals.get(listSig);
+                    if (raw instanceof JSONArray && finalTplId != null) {{
+                        JSONArray arr = (JSONArray) raw;
+                        for (int idx = 0; idx < arr.length(); idx++) {{
+                            Object elem = arr.opt(idx);
+                            View row = buildDynamicRow(finalTplId, elem, idx);
+                            if (row != null) ll.addView(row);
+                        }}
+                    }}
+                }};
+                listUpdaters.add(populate);
+                populate.run();
+                view = sv;
             }} else {{
                 FrameLayout boxView = new FrameLayout(this);
                 if ("ROOT".equals(widget)) {{
@@ -715,15 +766,96 @@ public class MainActivity extends Activity {{
         return stage;
     }}
 
+    private String getDynamicListSig(JSONObject ui) {{
+        if (ui == null || !"LIST".equals(ui.optString("widget"))) return null;
+        JSONArray args = ui.optJSONArray("args");
+        if (args == null) return null;
+        for (int i = 0; i < args.length(); i++) {{
+            JSONObject a = args.optJSONObject(i);
+            if (a != null && "node_ref".equals(a.optString("arg_kind"))) return a.optString("value", null);
+        }}
+        return null;
+    }}
+
+    private View buildDynamicRow(String tplId, Object item, int index) {{
+        JSONObject ui = nodeMap.get(tplId);
+        if (ui == null) return null;
+        String w = ui.optString("widget");
+        JSONArray args = ui.optJSONArray("args");
+        JSONObject body = ui.optJSONObject("body");
+        if ("TXT".equals(w)) {{
+            TextView tv = new TextView(this);
+            tv.setTextSize(TypedValue.COMPLEX_UNIT_PX, getFloatArg(args, 0, 14f) * currentScale);
+            tv.setTextColor(parseColorSafe(getStringArg(args, 2, "#0F172A"), Color.BLACK));
+            JSONObject bodyVal = body != null ? body.optJSONObject("value") : null;
+            String tpl = bodyVal != null ? bodyVal.optString("template", "") : "";
+            tv.setText(resolveText(tpl, item));
+            return tv;
+        }}
+        if ("BTN".equals(w)) {{
+            Button b = new Button(this);
+            b.setAllCaps(false);
+            b.setBackground(makeRoundedBg(getStringArg(args, 3, "#2563EB"), getFloatArg(args, 2, 6f) * currentScale));
+            b.setTextColor(Color.WHITE);
+            if (body != null && "children".equals(body.optString("body_kind"))) {{
+                JSONArray ch = body.optJSONArray("value");
+                if (ch != null && ch.length() > 0) {{
+                    JSONObject lbl = nodeMap.get(ch.optString(0));
+                    JSONObject lblBody = lbl != null ? lbl.optJSONObject("body") : null;
+                    JSONObject lblVal = lblBody != null ? lblBody.optJSONObject("value") : null;
+                    if (lblVal != null) {{
+                        b.setText(resolveText(lblVal.optString("template", ""), item));
+                    }}
+                }}
+            }}
+            b.setOnClickListener(v -> runNodeEvent(ui, "tap", item, index));
+            return b;
+        }}
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        int pad = Math.round(8f * currentScale);
+        row.setPadding(pad, pad, pad, pad);
+        if (body != null && "children".equals(body.optString("body_kind"))) {{
+            JSONArray ch = body.optJSONArray("value");
+            if (ch != null) {{
+                for (int i = 0; i < ch.length(); i++) {{
+                    View childView = buildDynamicRow(ch.optString(i), item, index);
+                    if (childView != null) {{
+                        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                            i == 0 ? 0 : LinearLayout.LayoutParams.WRAP_CONTENT,
+                            LinearLayout.LayoutParams.WRAP_CONTENT,
+                            i == 0 ? 1f : 0f
+                        );
+                        row.addView(childView, lp);
+                    }}
+                }}
+            }}
+        }}
+        return row;
+    }}
+
+    private void savePersistedSignals() {{
+        SharedPreferences.Editor ed = getSharedPreferences("aion_persist", MODE_PRIVATE).edit();
+        for (String id : persistedSignals) {{
+            Object val = signals.get(id);
+            if (val != null) ed.putString(id, String.valueOf(val));
+        }}
+        ed.apply();
+    }}
+
     private boolean isNodeVisible(String id) {{
         String cur = id;
         while (cur != null) {{
             String p = parentMap.get(cur);
             if (p == null) break;
             JSONObject pUi = nodeMap.get(p);
-            if (pUi != null && "ROUTER".equals(pUi.optString("widget"))) {{
-                String active = activeScreens.get(p);
-                if (active != null && !active.equals(cur)) return false;
+            if (pUi != null) {{
+                if (getDynamicListSig(pUi) != null) return false;
+                if ("ROUTER".equals(pUi.optString("widget"))) {{
+                    String active = activeScreens.get(p);
+                    if (active != null && !active.equals(cur)) return false;
+                }}
             }}
             cur = p;
         }}
@@ -748,6 +880,8 @@ public class MainActivity extends Activity {{
                             if (targetId.equals(ch.optString(i))) {{
                                 activeScreens.put(e.getKey(), targetId);
                                 applyRouterVisibility();
+                                JSONObject screenUi = nodeMap.get(targetId);
+                                if (screenUi != null) runNodeEvent(screenUi, "init", null, -1);
                                 return;
                             }}
                         }}
@@ -758,22 +892,71 @@ public class MainActivity extends Activity {{
     }}
 
     private void handleNodeClick(JSONObject ui) {{
+        runNodeEvent(ui, "tap", null, -1);
+    }}
+
+    private void runNodeEvent(JSONObject ui, String eventName, Object itemCtx, int indexCtx) {{
         JSONArray events = ui.optJSONArray("events");
         if (events == null) return;
-        JSONObject tap = findEvent(events, "tap");
+        JSONObject tap = findEvent(events, eventName);
         if (tap == null) return;
         JSONObject act = tap.optJSONObject("action");
         if (act == null) return;
         String actKind = act.optString("action_kind");
-        if ("generic".equals(actKind) && "NAV".equals(act.optString("name"))) {{
-            JSONArray navArgs = act.optJSONArray("args");
-            if (navArgs != null && navArgs.length() > 0) {{
-                JSONObject first = navArgs.optJSONObject(0);
-                if (first != null && first.optJSONObject("kind") != null) {{
-                    String target = first.getJSONObject("kind").optString("value", null);
+        if ("generic".equals(actKind)) {{
+            String gName = act.optString("name");
+            JSONArray gArgs = act.optJSONArray("args");
+            if ("NAV".equals(gName) && gArgs != null && gArgs.length() > 0) {{
+                JSONObject first = gArgs.optJSONObject(0);
+                JSONObject fk = first != null ? first.optJSONObject("kind") : null;
+                if (fk != null) {{
+                    String target = fk.optString("value", null);
                     if (target != null) navigateTo(target);
                 }}
+                return;
             }}
+            if ("PUSH".equals(gName) && gArgs != null && gArgs.length() >= 2) {{
+                JSONObject a0 = gArgs.optJSONObject(0);
+                JSONObject k0 = a0 != null ? a0.optJSONObject("kind") : null;
+                String sigId = k0 != null ? k0.optString("value", null) : null;
+                Object elem = evalExpr(gArgs.optJSONObject(1), null, itemCtx, indexCtx);
+                if (sigId != null) {{
+                    JSONArray cur = (signals.get(sigId) instanceof JSONArray) ? (JSONArray) signals.get(sigId) : new JSONArray();
+                    cur.put(elem);
+                    signals.put(sigId, cur);
+                    savePersistedSignals();
+                    updateTexts();
+                }}
+                return;
+            }}
+            if ("REMOVE".equals(gName) && gArgs != null && gArgs.length() >= 2) {{
+                JSONObject a0 = gArgs.optJSONObject(0);
+                JSONObject k0 = a0 != null ? a0.optJSONObject("kind") : null;
+                String sigId = k0 != null ? k0.optString("value", null) : null;
+                Object idxObj = evalExpr(gArgs.optJSONObject(1), null, itemCtx, indexCtx);
+                int rmIdx = (idxObj instanceof Number) ? ((Number) idxObj).intValue() : indexCtx;
+                if (sigId != null && signals.get(sigId) instanceof JSONArray) {{
+                    JSONArray cur = (JSONArray) signals.get(sigId);
+                    JSONArray next = new JSONArray();
+                    for (int i = 0; i < cur.length(); i++) if (i != rmIdx) next.put(cur.opt(i));
+                    signals.put(sigId, next);
+                    savePersistedSignals();
+                    updateTexts();
+                }}
+                return;
+            }}
+            return;
+        }}
+        if ("set".equals(actKind)) {{
+            String sigId = act.optString("signal");
+            signals.put(sigId, evalExpr(act.optJSONObject("value"), null, itemCtx, indexCtx));
+            savePersistedSignals();
+            updateTexts();
+            return;
+        }}
+        if ("toast".equals(actKind)) {{
+            Object msg = evalExpr(act.optJSONObject("message"), null, itemCtx, indexCtx);
+            Toast.makeText(this, msg == null ? "" : String.valueOf(msg), Toast.LENGTH_SHORT).show();
             return;
         }}
         if (!"call".equals(actKind)) return;
@@ -784,7 +967,7 @@ public class MainActivity extends Activity {{
 
         String method = apiNode.optString("method", "POST").toUpperCase();
         String path = apiNode.optString("path", "/");
-        Object payloadObj = evalExpr(act.optJSONObject("payload"), null);
+        Object payloadObj = evalExpr(act.optJSONObject("payload"), null, itemCtx, indexCtx);
         String bodyJson = (payloadObj instanceof JSONObject) ? payloadObj.toString() : "{{}}";
 
         executor.execute(() -> {{
@@ -808,13 +991,14 @@ public class MainActivity extends Activity {{
                 if (status < 200 || status >= 300) {{
                     throw new RuntimeException("HTTP " + status);
                 }}
-                JSONObject data = new JSONObject(respText);
+                Object data = new JSONTokener(respText).nextValue();
                 mainHandler.post(() -> {{
                     JSONObject bind = act.optJSONObject("bind");
                     if (bind != null) {{
                         String sigId = bind.optString("signal");
-                        Object val = evalExpr(bind.optJSONObject("value"), data);
+                        Object val = evalExpr(bind.optJSONObject("value"), data, itemCtx, indexCtx);
                         signals.put(sigId, val);
+                        savePersistedSignals();
                         updateTexts();
                     }}
                 }});
@@ -825,7 +1009,7 @@ public class MainActivity extends Activity {{
                     if (errEv != null) {{
                         JSONObject errAct = errEv.optJSONObject("action");
                         if (errAct != null && "toast".equals(errAct.optString("action_kind"))) {{
-                            Object evaluated = evalExpr(errAct.optJSONObject("message"), null);
+                            Object evaluated = evalExpr(errAct.optJSONObject("message"), null, itemCtx, indexCtx);
                             if (evaluated != null) msg = String.valueOf(evaluated);
                         }}
                     }}
@@ -843,7 +1027,7 @@ public class MainActivity extends Activity {{
         return null;
     }}
 
-    private Object evalExpr(JSONObject expr, JSONObject resObj) {{
+    private Object evalExpr(JSONObject expr, Object resObj, Object itemCtx, int indexCtx) {{
         if (expr == null) return null;
         JSONObject kind = expr.optJSONObject("kind");
         if (kind == null) return null;
@@ -855,11 +1039,15 @@ public class MainActivity extends Activity {{
             return signals.get(kind.optString("value"));
         }}
         if ("ident".equals(k)) {{
-            return "res".equals(kind.optString("value")) ? resObj : null;
+            String idName = kind.optString("value");
+            if ("res".equals(idName)) return resObj;
+            if ("item".equals(idName)) return itemCtx;
+            if ("index".equals(idName)) return indexCtx;
+            return null;
         }}
         if ("member".equals(k)) {{
             JSONObject v = kind.optJSONObject("value");
-            Object obj = evalExpr(v.optJSONObject("object"), resObj);
+            Object obj = evalExpr(v.optJSONObject("object"), resObj, itemCtx, indexCtx);
             if (obj instanceof JSONObject) {{
                 return ((JSONObject) obj).opt(v.optString("field"));
             }}
@@ -873,7 +1061,7 @@ public class MainActivity extends Activity {{
                     JSONArray pair = pairs.optJSONArray(i);
                     if (pair != null && pair.length() == 2) {{
                         try {{
-                            out.put(pair.getString(0), evalExpr(pair.getJSONObject(1), resObj));
+                            out.put(pair.getString(0), evalExpr(pair.getJSONObject(1), resObj, itemCtx, indexCtx));
                         }} catch (Exception ignored) {{}}
                     }}
                 }}
@@ -885,15 +1073,26 @@ public class MainActivity extends Activity {{
 
     private void updateTexts() {{
         for (TextBinding b : textBindings) {{
-            b.view.setText(resolveText(b.template));
+            b.view.setText(resolveText(b.template, null));
         }}
+        for (Runnable r : listUpdaters) r.run();
     }}
 
-    private String resolveText(String template) {{
+    private String resolveText(String template, Object item) {{
         String out = template;
         for (Map.Entry<String, Object> e : signals.entrySet()) {{
             String val = e.getValue() == null ? "" : String.valueOf(e.getValue());
             out = out.replace("{{" + e.getKey() + "}}", val);
+        }}
+        if (item instanceof JSONObject) {{
+            JSONObject jo = (JSONObject) item;
+            Iterator<String> keys = jo.keys();
+            while (keys.hasNext()) {{
+                String fk = keys.next();
+                out = out.replace("{{item." + fk + "}}", String.valueOf(jo.opt(fk)));
+            }}
+        }} else if (item != null) {{
+            out = out.replace("{{item}}", String.valueOf(item));
         }}
         return out;
     }}

@@ -165,7 +165,7 @@ fn tool_definitions() -> Value {
         },
         {
             "name": "aion_patch",
-            "description": "Transactionally apply ADD/PATCH/DEL differential AST patches to an AION program and validate the result.",
+            "description": "Transactionally apply ADD/PATCH/DEL differential AST patches to an AION program, validate the result, and return canonical formatted_source (optionally writing directly to write_path).",
             "inputSchema": {
                 "type": "object",
                 "required": ["source", "patches"],
@@ -173,6 +173,10 @@ fn tool_definitions() -> Value {
                     "source": { "type": "string", "description": "AION source code." },
                     "patches": {
                         "description": "A single PatchOp object or an array of PatchOp objects."
+                    },
+                    "write_path": {
+                        "type": "string",
+                        "description": "Optional path to overwrite with canonical formatted_source if validation succeeds."
                     }
                 }
             }
@@ -330,11 +334,22 @@ fn call_tool(
                 Ok(patch_report) => {
                     let check_report = check_program(&prog, registry);
                     let is_err = !check_report.ok;
+                    let formatted_source = aion_ast::format_program(&prog);
+                    let mut written_to: Option<String> = None;
+                    if check_report.ok {
+                        if let Some(wp) = args.get("write_path").and_then(Value::as_str) {
+                            std::fs::write(wp, &formatted_source)
+                                .map_err(|e| format!("failed writing to `{wp}`: {e}"))?;
+                            written_to = Some(wp.to_string());
+                        }
+                    }
                     Ok((
                         json!({
                             "ok": check_report.ok,
                             "patch_report": patch_report,
                             "check_report": check_report,
+                            "formatted_source": formatted_source,
+                            "written_to": written_to,
                             "program": prog
                         }),
                         is_err,
@@ -450,24 +465,25 @@ fn call_tool(
                     "#EXT": "#EXT:alias = \"org/pkg@ver\"",
                     "#SRV": "#SRV0:HTTP[port:8080, proto:on]",
                     "#MW": "#MW0:PIPE(ctx) { let tok = ctx.hdr(\"Authorization\") ... -> NEXT }",
-                    "#M": "#M0:ModelName{field:type, ...}",
-                    "#API": "#API0:#SRV0.POST[\"/v1/path\", #MW0] IN{x:i32} OUT{#M0} { ... -> RET }",
-                    "#S": "#S0:i32=0",
-                    "#N": "#N0:WIDGET[positional_args]{#N1} @tap->CALL(#API0,{...})=>#S0=res.field @err->TOAST(\"Error\")"
+                    "#M": "#M_Item:Item{id:str, title:str, amount:f64}",
+                    "#API": "#API_list:#SRV0.GET[\"/v1/items\", #MW0] OUT{list<#M_Item>} { ... -> RET }",
+                    "#S": "#S_items:list<#M_Item> = [] @persist",
+                    "#N": "#N_root:ROOT[0,0,100%,100%,#F8FAFC]{#N_main} @init->CALL(#API_list,{})=>#S_items=res @err->TOAST(\"Error\")"
                 },
                 "ctx_methods": ["ctx.hdr(name)", "ctx.get(key)", "ctx.set(key, val)", "ctx.param(name)", "ctx.query(name)"],
                 "widgets": {
-                    "ROOT": "ROOT[pad_x, pad_y, 100%, 100%, #BG_HEX]{#N1}",
+                    "ROOT": "ROOT[pad_x, pad_y, 100%, 100%, #BG_HEX]{#N1} (@init->... supported)",
                     "FLEX": "FLEX[v|h, c|s|e|sb|sa, c|s|e|st, gap, scroll?]{#N2,#N3}",
-                    "NAV": "NAV[100%, 56, #BG_HEX]{#N_tab1}",
+                    "NAV": "NAV[100%, 56, #BG_HEX]{#N_tab1,#N_tab2}",
                     "ROUTER": "ROUTER[#N_initial_screen]{#N_screen1,#N_screen2} (switched via @tap->NAV(#N_screen2))",
-                    "LIST": "LIST[v|h, gap, noscroll?]{#N_item}",
-                    "TXT": "TXT[font_size, weight, #COLOR_HEX]{\"Text {#S0}\"}",
+                    "LIST": "LIST[v|h, gap, #S_list_opt, noscroll?]{#N_row_tpl} (repeats #N_row_tpl with {item.field} & index)",
+                    "TXT": "TXT[font_size, weight, #COLOR_HEX]{\"Text {#S0} or {item.field}\"}",
                     "INP": "INP[width, height, radius, #BG_HEX, #S_bound]{\"Placeholder\"}",
-                    "BTN": "BTN[width, height, radius, #BG_HEX]{#N_lbl} @tap->CALL(#API0,{...})=>#S0=res.f @err->TOAST(\"Error\")"
+                    "BTN": "BTN[width, height, radius, #BG_HEX]{#N_lbl} @tap->PUSH(#S_items,{...}) | REMOVE(#S_items,index) | CALL(#API0,{...})=>#S0=res.f @err->TOAST(\"Error\")"
                 },
                 "rules": [
-                    "Flat graph only (zero nesting).",
+                    "Flat graph only (zero nesting). Semantic IDs (#N_home, #S_budget, #M_Expense, #API_save) are recommended.",
+                    "Never spin up multiple #SRV servers for multiple screens; use one #SRV0 + ROUTER + @tap->NAV(#N_screen).",
                     "Every #N node with CALL(#API...) MUST declare an @err handler.",
                     "UI must fit mobile (390x844) and desktop (1440x900) without E_UI_OVERFLOW.",
                     "Call aion_inspect_ext before using any #EXT method."

@@ -46,7 +46,7 @@ fn type_parser() -> impl Parser<Token, AionType, Error = Simple<Token>> + Clone 
 
         let model_ref = node_tag_parser().map(|id| AionType::ModelRef(NodeId::new(id)));
 
-        let prim_or_named = ident_parser().map(|s| match s.as_str() {
+        let prim_or_named = select! { Token::Ident(s) if s != "list" && s != "map" => s }.map(|s| match s.as_str() {
             "i32" => AionType::I32,
             "f64" => AionType::F64,
             "str" => AionType::Str,
@@ -60,6 +60,29 @@ fn type_parser() -> impl Parser<Token, AionType, Error = Simple<Token>> + Clone 
 
         choice((list_ty, map_ty, ext_ty, model_ref, prim_or_named)).labelled("type")
     })
+}
+
+/// Parses `<type> =`, including `list<T>=` and `map<K,V>=` where `>=` was lexed as `Token::Ge`.
+fn type_then_eq_parser() -> impl Parser<Token, AionType, Error = Simple<Token>> + Clone {
+    let fused_list = select! { Token::Ident(s) if s == "list" => () }
+        .ignore_then(just(Token::Lt))
+        .ignore_then(type_parser())
+        .then_ignore(just(Token::Ge))
+        .map(|inner| AionType::List(Box::new(inner)));
+
+    let fused_map = select! { Token::Ident(s) if s == "map" => () }
+        .ignore_then(just(Token::Lt))
+        .ignore_then(type_parser())
+        .then_ignore(just(Token::Comma))
+        .then(type_parser())
+        .then_ignore(just(Token::Ge))
+        .map(|(k, v)| AionType::Map(Box::new(k), Box::new(v)));
+
+    choice((
+        fused_list,
+        fused_map,
+        type_parser().then_ignore(just(Token::Eq)),
+    ))
 }
 
 fn field_def_parser<'a>(
@@ -532,13 +555,17 @@ pub fn program_parser<'a>(src: &'a str) -> impl Parser<Token, Program, Error = S
     let signal_node =
         select! { Token::NodeTag(t) if t.starts_with("#S") && !t.starts_with("#SRV") => t }
             .then_ignore(just(Token::Colon))
-            .then(type_parser())
-            .then_ignore(just(Token::Eq))
+            .then(type_then_eq_parser())
             .then(expr_parser(src))
-            .map_with_span(move |((id, ty), init), range| FlatNode {
+            .then(
+                select! { Token::AtIdent(a) if a == "persist" => () }
+                    .or_not()
+                    .map(|o| o.is_some()),
+            )
+            .map_with_span(move |(((id, ty), init), persist), range| FlatNode {
                 id: NodeId::new(id),
                 span: to_span(src, range),
-                kind: NodeKind::Signal(SignalNode { ty, init }),
+                kind: NodeKind::Signal(SignalNode { ty, init, persist }),
             });
 
     let ui_arg = choice((

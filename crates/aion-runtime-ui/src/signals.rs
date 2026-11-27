@@ -14,6 +14,8 @@ pub enum SignalValue {
     F64(f64),
     Str(String),
     Bool(bool),
+    List(Vec<SignalValue>),
+    Map(BTreeMap<String, SignalValue>),
     Null,
 }
 
@@ -24,6 +26,14 @@ impl fmt::Display for SignalValue {
             SignalValue::F64(v) => write!(f, "{v}"),
             SignalValue::Str(s) => f.write_str(s),
             SignalValue::Bool(b) => write!(f, "{b}"),
+            SignalValue::List(items) => {
+                let s = serde_json::to_string(items).unwrap_or_else(|_| "[]".to_string());
+                f.write_str(&s)
+            }
+            SignalValue::Map(map) => {
+                let s = serde_json::to_string(map).unwrap_or_else(|_| "{}".to_string());
+                f.write_str(&s)
+            }
             SignalValue::Null => f.write_str("null"),
         }
     }
@@ -146,6 +156,14 @@ fn eval_signal_init(expr: &Expr) -> SignalValue {
         ExprKind::Float(f) => SignalValue::F64(*f),
         ExprKind::Str(s) => SignalValue::Str(s.clone()),
         ExprKind::Bool(b) => SignalValue::Bool(*b),
+        ExprKind::List(items) => SignalValue::List(items.iter().map(eval_signal_init).collect()),
+        ExprKind::Object(entries) => {
+            let mut m = BTreeMap::new();
+            for (k, v) in entries {
+                m.insert(k.clone(), eval_signal_init(v));
+            }
+            SignalValue::Map(m)
+        }
         _ => SignalValue::Null,
     }
 }

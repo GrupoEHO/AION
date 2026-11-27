@@ -405,6 +405,12 @@ fn signal_to_ext_value(val: &SignalValue) -> ExtValue {
         SignalValue::F64(f) => ExtValue::F64(*f),
         SignalValue::Str(s) => ExtValue::Str(s.clone()),
         SignalValue::Bool(b) => ExtValue::Bool(*b),
+        SignalValue::List(items) => ExtValue::List(items.iter().map(signal_to_ext_value).collect()),
+        SignalValue::Map(map) => ExtValue::Map(
+            map.iter()
+                .map(|(k, v)| (k.clone(), signal_to_ext_value(v)))
+                .collect(),
+        ),
         SignalValue::Null => ExtValue::Void,
     }
 }
@@ -416,6 +422,12 @@ fn ext_to_signal_value(val: &ExtValue) -> SignalValue {
         ExtValue::Str(s) => SignalValue::Str(s.clone()),
         ExtValue::Bool(b) => SignalValue::Bool(*b),
         ExtValue::Ts(t) => SignalValue::I32(*t as i32),
+        ExtValue::List(items) => SignalValue::List(items.iter().map(ext_to_signal_value).collect()),
+        ExtValue::Map(map) => SignalValue::Map(
+            map.iter()
+                .map(|(k, v)| (k.clone(), ext_to_signal_value(v)))
+                .collect(),
+        ),
         _ => SignalValue::Null,
     }
 }
