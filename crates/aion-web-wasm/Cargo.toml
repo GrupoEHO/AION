@@ -1,0 +1,15 @@
+[package]
+name = "aion-web-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+aion-ast.workspace = true
+aion-runtime-ui = { path = "../aion-runtime-ui", default-features = false }
+serde.workspace = true
+serde_json.workspace = true
+wasm-bindgen = "0.2.130"

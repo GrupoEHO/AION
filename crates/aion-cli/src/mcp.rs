@@ -254,7 +254,8 @@ fn tool_definitions() -> Value {
                     "app_name": { "type": "string", "default": "AION App" },
                     "api_base_url": { "type": "string" },
                     "out_dir": { "type": "string", "default": "build/web" },
-                    "release": { "type": "boolean", "default": true }
+                    "release": { "type": "boolean", "default": true },
+                    "wasm": { "type": "boolean", "default": false, "description": "Compile Rust taffy + Signals runtime to WebAssembly (.wasm)." }
                 }
             }
         }
@@ -522,6 +523,7 @@ fn call_tool(
                 opts.out_dir = std::path::PathBuf::from(v);
             }
             opts.release = args.get("release").and_then(Value::as_bool).unwrap_or(true);
+            opts.wasm = args.get("wasm").and_then(Value::as_bool).unwrap_or(false);
             match crate::web_build::build_web_bundle(&prog, &opts) {
                 Ok(res) => Ok((serde_json::to_value(res).unwrap(), false)),
                 Err(err) => Ok((json!({ "ok": false, "error": err }), true)),

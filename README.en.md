@@ -177,8 +177,9 @@ aion web examples/promg_web_demo.aion
 # Compile an Android App Bundle (.aab) ready for Google Play (auto-reads aion.toml)
 aion build appbundle --release
 
-# Compile a standalone production Web bundle in build/web/ (Firebase Hosting / Cloudflare / Nginx)
+# Compile a standalone production Web bundle in build/web/ (lightweight HTML or real WebAssembly with --wasm)
 aion build web --release
+aion build web --wasm --release
 
 # Run the production HTTP/Protobuf backend server
 aion run app.aion

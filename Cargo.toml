@@ -7,6 +7,7 @@ members = [
     "crates/aion-checker",
     "crates/aion-runtime-net",
     "crates/aion-runtime-ui",
+    "crates/aion-web-wasm",
     "crates/aion-cli",
     "plugins/aion-ext-firebase",
     "plugins/aion-ext-mongo",

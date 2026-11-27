@@ -242,6 +242,7 @@ fn main() {
                         opts.out_dir = PathBuf::from(v);
                     }
                     opts.release = is_release;
+                    opts.wasm = args.iter().any(|a| a == "--wasm");
 
                     match build_web_bundle(&prog, &opts) {
                         Ok(res) => println!("{}", serde_json::to_string_pretty(&res).unwrap()),

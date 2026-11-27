@@ -506,6 +506,7 @@ mod tests {
             api_base_url: Some("https://api.nidox.app".to_string()),
             out_dir: tmp.clone(),
             release: true,
+            wasm: false,
         };
         let res = crate::web_build::build_web_bundle(&prog, &opts).unwrap();
         assert!(res.ok);
