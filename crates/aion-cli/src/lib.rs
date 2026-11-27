@@ -1,4 +1,5 @@
 pub mod android;
+pub mod ios;
 pub mod mcp;
 pub mod web;
 pub mod web_build;
@@ -372,7 +373,8 @@ mod tests {
                 "aion_create",
                 "aion_spec",
                 "aion_build_android",
-                "aion_build_web"
+                "aion_build_web",
+                "aion_build_ios"
             ]
         );
 

@@ -8,6 +8,7 @@ use std::sync::Arc;
 use aion_ast::DiagnosticReport;
 use aion_checker::check_program;
 use aion_cli::android::{build_android_aab, AndroidBuildOptions};
+use aion_cli::ios::{build_ios_app, IosBuildOptions};
 use aion_cli::mcp::serve_mcp_stdio;
 use aion_cli::web::serve_web;
 use aion_cli::web_build::{build_web_bundle, ProjectMeta, WebBuildOptions};
@@ -46,7 +47,7 @@ fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
         eprintln!(
-            "Usage:\n  aion create <name> [dir]\n  aion parse <file.aion>\n  aion check <file.aion> [--manifests-dir <dir>]\n  aion patch <file.aion> <patch.json> [--manifests-dir <dir>]\n  aion build appbundle [--release|--debug] [file.aion] [--app-id <id>] [--name <name>] [--out <dir>]\n  aion build web [--release|--debug] [file.aion] [--name <name>] [--api-base-url <url>] [--out <dir>]\n  aion run <file.aion> [--manifests-dir <dir>]\n  aion web <file.aion> [--manifests-dir <dir>]\n  aion mcp [--manifests-dir <dir>]"
+            "Usage:\n  aion create <name> [dir]\n  aion parse <file.aion>\n  aion check <file.aion> [--manifests-dir <dir>]\n  aion patch <file.aion> <patch.json> [--manifests-dir <dir>]\n  aion build appbundle [--release|--debug] [file.aion] [--app-id <id>] [--name <name>] [--out <dir>]\n  aion build ios|ipa [--release|--debug] [--simulator] [--no-codesign] [file.aion] [--bundle-id <id>] [--name <name>] [--team-id <id>] [--out <dir>]\n  aion build web [--release|--debug] [--wasm] [file.aion] [--name <name>] [--api-base-url <url>] [--out <dir>]\n  aion run <file.aion> [--manifests-dir <dir>]\n  aion web <file.aion> [--manifests-dir <dir>]\n  aion mcp [--manifests-dir <dir>]"
         );
         process::exit(2);
     }
@@ -128,10 +129,13 @@ fn main() {
             let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
             let meta = ProjectMeta::load_from_dir(&cwd);
 
-            // Optional positional `.aion` path (if omitted, reads `entry` from `aion.toml` or `app.aion`).
+            // Optional positional `.aion` path anywhere after `aion build <target>`
+            // (if omitted, reads `entry` from `aion.toml` or `app.aion`).
             let file_path = args
-                .get(3)
-                .filter(|a| !a.starts_with('-'))
+                .iter()
+                .skip(3)
+                .find(|a| !a.starts_with('-') && a.ends_with(".aion"))
+                .or_else(|| args.get(3).filter(|a| !a.starts_with('-')))
                 .map(PathBuf::from)
                 .unwrap_or_else(|| {
                     PathBuf::from(meta.entry.clone().unwrap_or_else(|| "app.aion".to_string()))
@@ -259,8 +263,72 @@ fn main() {
                         }
                     }
                 }
+                "ios" | "ipa" => {
+                    let mut opts = IosBuildOptions::default();
+                    if let Some(ref name) = meta.name {
+                        opts.app_name = name.clone();
+                        let safe_pkg: String = name
+                            .chars()
+                            .filter(|c| c.is_ascii_alphanumeric())
+                            .map(|c| c.to_ascii_lowercase())
+                            .collect();
+                        if !safe_pkg.is_empty() {
+                            opts.bundle_id = format!("com.aion.{safe_pkg}");
+                        }
+                    }
+                    if let Some(ref app_id) = meta.app_id {
+                        opts.bundle_id = app_id.clone();
+                    }
+                    if let Some(ref ver) = meta.version {
+                        opts.version_name = ver.clone();
+                    }
+                    if let Some(v) = find_flag(&args, "--bundle-id").or_else(|| find_flag(&args, "--app-id")) {
+                        opts.bundle_id = v;
+                    }
+                    if let Some(v) = find_flag(&args, "--name") {
+                        opts.app_name = v;
+                    }
+                    if let Some(v) = find_flag(&args, "--version").or_else(|| find_flag(&args, "--version-name")) {
+                        opts.version_name = v;
+                    }
+                    if let Some(v) = find_flag(&args, "--build-number") {
+                        opts.build_number = v.parse().unwrap_or(1);
+                    }
+                    if let Some(v) = find_flag(&args, "--team-id") {
+                        opts.team_id = Some(v);
+                    }
+                    if let Some(v) = find_flag(&args, "--export-method") {
+                        opts.export_method = v;
+                    }
+                    if let Some(v) = find_flag(&args, "--api-base-url") {
+                        opts.api_base_url = Some(v);
+                    }
+                    if let Some(v) = find_flag(&args, "--out") {
+                        opts.out_dir = PathBuf::from(v);
+                    }
+                    opts.debug = is_debug;
+                    opts.simulator = args.iter().any(|a| a == "--simulator");
+                    opts.ipa = target == "ipa" || args.iter().any(|a| a == "--ipa");
+                    opts.no_codesign = args.iter().any(|a| a == "--no-codesign");
+                    opts.generate_only = args.iter().any(|a| a == "--generate-only");
+
+                    match build_ios_app(&prog, &opts) {
+                        Ok(res) => println!("{}", serde_json::to_string_pretty(&res).unwrap()),
+                        Err(err) => {
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&serde_json::json!({
+                                    "ok": false,
+                                    "error": err
+                                }))
+                                .unwrap()
+                            );
+                            process::exit(1);
+                        }
+                    }
+                }
                 other => {
-                    eprintln!("Unknown build target `{other}`. Expected `appbundle` (or `android`) or `web`.");
+                    eprintln!("Unknown build target `{other}`. Expected `appbundle` (or `android`), `ios`, `ipa`, or `web`.");
                     process::exit(2);
                 }
             }

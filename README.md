@@ -183,6 +183,12 @@ aion web examples/promg_web_demo.aion
 # Compilar un Android App Bundle (.aab) listo para Google Play (lee aion.toml automáticamente)
 aion build appbundle --release
 
+# Compilar app nativa iOS (.app para Simulador/Dispositivo) o paquete .ipa (requiere macOS + Xcode)
+aion build ios --simulator
+aion build ipa --release --no-codesign
+# Con firma de Apple Developer para App Store / TestFlight:
+# aion build ipa --release --team-id TU_TEAM_ID --bundle-id com.tuempresa.miapp
+
 # Compilar un bundle Web estático de producción en build/web/ (HTML ligero o WebAssembly real con --wasm)
 aion build web --release
 aion build web --wasm --release

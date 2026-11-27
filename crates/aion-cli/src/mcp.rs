@@ -258,6 +258,29 @@ fn tool_definitions() -> Value {
                     "wasm": { "type": "boolean", "default": false, "description": "Compile Rust taffy + Signals runtime to WebAssembly (.wasm)." }
                 }
             }
+        },
+        {
+            "name": "aion_build_ios",
+            "description": "Validate an AION program, generate a native SwiftUI Xcode project, and compile an iOS .app (Simulator/Device) or .ipa archive via xcodebuild.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["source"],
+                "properties": {
+                    "source": { "type": "string", "description": "AION source code." },
+                    "bundle_id": { "type": "string", "default": "com.aion.app" },
+                    "app_name": { "type": "string", "default": "AION App" },
+                    "version_name": { "type": "string", "default": "0.1.0" },
+                    "build_number": { "type": "integer", "default": 1 },
+                    "api_base_url": { "type": "string" },
+                    "out_dir": { "type": "string", "default": "build/ios" },
+                    "debug": { "type": "boolean", "default": false },
+                    "simulator": { "type": "boolean", "default": false },
+                    "ipa": { "type": "boolean", "default": false },
+                    "no_codesign": { "type": "boolean", "default": true },
+                    "team_id": { "type": "string" },
+                    "generate_only": { "type": "boolean", "default": false }
+                }
+            }
         }
     ])
 }
@@ -526,6 +549,60 @@ fn call_tool(
             opts.release = args.get("release").and_then(Value::as_bool).unwrap_or(true);
             opts.wasm = args.get("wasm").and_then(Value::as_bool).unwrap_or(false);
             match crate::web_build::build_web_bundle(&prog, &opts) {
+                Ok(res) => Ok((serde_json::to_value(res).unwrap(), false)),
+                Err(err) => Ok((json!({ "ok": false, "error": err }), true)),
+            }
+        }
+        "aion_build_ios" => {
+            let source = args
+                .get("source")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "missing required string argument `source`".to_string())?;
+            let prog = match parse_program(source) {
+                Ok(p) => p,
+                Err(diags) => {
+                    let report = DiagnosticReport::from_diagnostics(diags);
+                    return Ok((serde_json::to_value(report).unwrap(), true));
+                }
+            };
+            let report = check_program(&prog, registry);
+            if !report.ok {
+                return Ok((serde_json::to_value(report).unwrap(), true));
+            }
+            let mut opts = crate::ios::IosBuildOptions::default();
+            if let Some(v) = args.get("bundle_id").and_then(Value::as_str) {
+                opts.bundle_id = v.to_string();
+            }
+            if let Some(v) = args.get("app_name").and_then(Value::as_str) {
+                opts.app_name = v.to_string();
+            }
+            if let Some(v) = args.get("version_name").and_then(Value::as_str) {
+                opts.version_name = v.to_string();
+            }
+            if let Some(v) = args.get("build_number").and_then(Value::as_u64) {
+                opts.build_number = v as u32;
+            }
+            if let Some(v) = args.get("api_base_url").and_then(Value::as_str) {
+                opts.api_base_url = Some(v.to_string());
+            }
+            if let Some(v) = args.get("out_dir").and_then(Value::as_str) {
+                opts.out_dir = std::path::PathBuf::from(v);
+            }
+            if let Some(v) = args.get("team_id").and_then(Value::as_str) {
+                opts.team_id = Some(v.to_string());
+            }
+            opts.debug = args.get("debug").and_then(Value::as_bool).unwrap_or(false);
+            opts.simulator = args.get("simulator").and_then(Value::as_bool).unwrap_or(false);
+            opts.ipa = args.get("ipa").and_then(Value::as_bool).unwrap_or(false);
+            opts.no_codesign = args
+                .get("no_codesign")
+                .and_then(Value::as_bool)
+                .unwrap_or(opts.team_id.is_none());
+            opts.generate_only = args
+                .get("generate_only")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            match crate::ios::build_ios_app(&prog, &opts) {
                 Ok(res) => Ok((serde_json::to_value(res).unwrap(), false)),
                 Err(err) => Ok((json!({ "ok": false, "error": err }), true)),
             }
