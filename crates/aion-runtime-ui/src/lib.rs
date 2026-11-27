@@ -119,6 +119,33 @@ mod tests {
         assert_eq!(issues[0].child_width, 500.0);
     }
 
+    #[test]
+    fn router_overlays_multiple_screens_without_vertical_overflow() {
+        let src = r#"
+#N0:ROOT[0,0,100%,100%,#F8FAFC]{#N1}
+#N1:FLEX[v,s,s,0]{#N2,#N3}
+#N2:NAV[100%,56,#0F172A]{#N10,#N11}
+#N3:ROUTER[#N20]{#N20,#N30}
+#N10:BTN[120,36,6,#2563EB]{} @tap->NAV(#N20)
+#N11:BTN[120,36,6,#334155]{} @tap->NAV(#N30)
+#N20:FLEX[v,c,c,16]{#N21}
+#N21:TXT[20,700,#0F172A]{"Presupuesto"}
+#N30:FLEX[v,c,c,16]{#N31}
+#N31:TXT[20,700,#0F172A]{"Tarjetas"}
+"#;
+        let prog = parse_program(src).unwrap();
+        let mobile = compute_layout(&prog, Viewport::MOBILE, None).unwrap();
+        assert!(
+            mobile.detect_overflows().is_empty(),
+            "unexpected overflows: {:?}",
+            mobile.detect_overflows()
+        );
+        let s1 = mobile.get(&NodeId::new("#N20")).unwrap();
+        let s2 = mobile.get(&NodeId::new("#N30")).unwrap();
+        assert_eq!((s1.x, s1.y, s1.width, s1.height), (s2.x, s2.y, s2.width, s2.height));
+        assert_eq!(s1.y, 56.0);
+    }
+
     #[cfg(feature = "gpu")]
     #[test]
     fn builds_gpu_display_list_and_shapes_text() {

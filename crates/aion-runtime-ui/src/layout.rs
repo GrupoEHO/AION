@@ -224,7 +224,22 @@ pub fn compute_layout(
             }
         }
 
-        let (style, scrollable) = ui_node_to_style(ui, signals);
+        let (mut style, scrollable) = ui_node_to_style(ui, signals);
+        // Direct children of a ROUTER are overlaid full-size screens so all screens
+        // are statically checked for overflow without stacking vertically.
+        if let Some(pid) = parent_map.get(node_id) {
+            if let Some(parent_ui) = ui_nodes.get(pid) {
+                if parent_ui.widget == "ROUTER" {
+                    style.position = Position::Absolute;
+                    style.inset = Rect {
+                        left: length(0.0_f32),
+                        right: length(0.0_f32),
+                        top: length(0.0_f32),
+                        bottom: length(0.0_f32),
+                    };
+                }
+            }
+        }
         scrollable_map.insert(node_id.clone(), scrollable);
 
         let tid = taffy
@@ -504,6 +519,19 @@ fn ui_node_to_style(ui: &UiNode, signals: Option<&SignalStore>) -> (Style, bool)
                 align_items: Some(AlignItems::Center),
                 flex_shrink: 0.0,
                 size: Size { width, height },
+                ..Default::default()
+            };
+            (style, false)
+        }
+        "ROUTER" => {
+            // ROUTER[#N_initial_screen?]{#N_screen1, #N_screen2, ...}
+            let style = Style {
+                display: Display::Flex,
+                flex_grow: 1.0,
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: percent(1.0_f32),
+                },
                 ..Default::default()
             };
             (style, false)

@@ -321,6 +321,45 @@ fn generate_wasm_index_html(app_name: &str) -> String {
 
     let bundle = null;
     let wasmApp = null;
+    let activeScreens = {{}};
+
+    function initRouters() {{
+      for (const n of bundle.program.nodes) {{
+        const ui = n.kind;
+        if (ui?.node_type === 'ui' && ui.widget === 'ROUTER') {{
+          const children = ui.body?.body_kind === 'children' ? ui.body.value : [];
+          const initial = ui.args?.[0]?.value || children[0];
+          if (initial && !(n.id in activeScreens)) activeScreens[n.id] = initial;
+        }}
+      }}
+    }}
+
+    function isNodeVisible(id, nodeMap, parentMap) {{
+      let cur = id;
+      while (cur) {{
+        const p = parentMap[cur];
+        if (!p) break;
+        const pUi = nodeMap[p];
+        if (pUi?.widget === 'ROUTER' && activeScreens[p] && activeScreens[p] !== cur) return false;
+        cur = p;
+      }}
+      return true;
+    }}
+
+    function navigateTo(targetId) {{
+      for (const n of bundle.program.nodes) {{
+        const ui = n.kind;
+        if (ui?.node_type === 'ui' && ui.widget === 'ROUTER') {{
+          const children = ui.body?.body_kind === 'children' ? ui.body.value : [];
+          if (children.includes(targetId)) {{
+            activeScreens[n.id] = targetId;
+            renderStage();
+            return true;
+          }}
+        }}
+      }}
+      return false;
+    }}
 
     function showToast(msg) {{
       const el = document.getElementById('toast');
@@ -363,6 +402,11 @@ fn generate_wasm_index_html(app_name: &str) -> String {
       const tap = (ui.events || []).find(e => e.event === 'tap');
       if (!tap) return;
       const act = tap.action;
+      if (act.action_kind === 'generic' && act.name === 'NAV') {{
+        const target = act.args?.[0]?.kind?.value;
+        if (target) navigateTo(target);
+        return;
+      }}
       if (act.action_kind === 'call') {{
         const apiNode = bundle.program.nodes.find(n => n.id === act.api)?.kind;
         if (!apiNode) return;
@@ -406,11 +450,17 @@ fn generate_wasm_index_html(app_name: &str) -> String {
 
       const nodeMap = {{}};
       for (const n of bundle.program.nodes) nodeMap[n.id] = n.kind;
+      const parentMap = {{}};
+      for (const [id, b] of Object.entries(layout.boxes)) {{
+        if (b.parent) parentMap[id] = b.parent;
+      }}
+      initRouters();
 
       for (const id of layout.paint_order) {{
         const box = layout.boxes[id];
         const ui = nodeMap[id];
         if (!box || !ui || ui.node_type !== 'ui') continue;
+        if (!isNodeVisible(id, nodeMap, parentMap)) continue;
 
         let el;
         if (ui.widget === 'BTN') {{
@@ -522,6 +572,45 @@ fn generate_prod_index_html(app_name: &str) -> String {
   <script>
     let bundle = null;
     let signals = {{}};
+    let activeScreens = {{}};
+
+    function initRouters() {{
+      for (const n of bundle.program.nodes) {{
+        const ui = n.kind;
+        if (ui?.node_type === 'ui' && ui.widget === 'ROUTER') {{
+          const children = ui.body?.body_kind === 'children' ? ui.body.value : [];
+          const initial = ui.args?.[0]?.value || children[0];
+          if (initial && !(n.id in activeScreens)) activeScreens[n.id] = initial;
+        }}
+      }}
+    }}
+
+    function isNodeVisible(id, nodeMap, parentMap) {{
+      let cur = id;
+      while (cur) {{
+        const p = parentMap[cur];
+        if (!p) break;
+        const pUi = nodeMap[p];
+        if (pUi?.widget === 'ROUTER' && activeScreens[p] && activeScreens[p] !== cur) return false;
+        cur = p;
+      }}
+      return true;
+    }}
+
+    function navigateTo(targetId) {{
+      for (const n of bundle.program.nodes) {{
+        const ui = n.kind;
+        if (ui?.node_type === 'ui' && ui.widget === 'ROUTER') {{
+          const children = ui.body?.body_kind === 'children' ? ui.body.value : [];
+          if (children.includes(targetId)) {{
+            activeScreens[n.id] = targetId;
+            renderStage();
+            return true;
+          }}
+        }}
+      }}
+      return false;
+    }}
 
     function showToast(msg) {{
       const el = document.getElementById('toast');
@@ -568,6 +657,11 @@ fn generate_prod_index_html(app_name: &str) -> String {
       const tap = (ui.events || []).find(e => e.event === 'tap');
       if (!tap) return;
       const act = tap.action;
+      if (act.action_kind === 'generic' && act.name === 'NAV') {{
+        const target = act.args?.[0]?.kind?.value;
+        if (target) navigateTo(target);
+        return;
+      }}
       if (act.action_kind === 'call') {{
         const apiNode = bundle.program.nodes.find(n => n.id === act.api)?.kind;
         if (!apiNode) return;
@@ -607,11 +701,17 @@ fn generate_prod_index_html(app_name: &str) -> String {
 
       const nodeMap = {{}};
       for (const n of bundle.program.nodes) nodeMap[n.id] = n.kind;
+      const parentMap = {{}};
+      for (const [id, b] of Object.entries(layout.boxes)) {{
+        if (b.parent) parentMap[id] = b.parent;
+      }}
+      initRouters();
 
       for (const id of layout.paint_order) {{
         const box = layout.boxes[id];
         const ui = nodeMap[id];
         if (!box || !ui || ui.node_type !== 'ui') continue;
+        if (!isNodeVisible(id, nodeMap, parentMap)) continue;
 
         let el;
         if (ui.widget === 'BTN') {{

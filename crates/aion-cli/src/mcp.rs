@@ -437,6 +437,7 @@ fn call_tool(
                     "ROOT": "ROOT[pad_x, pad_y, 100%, 100%, #BG_HEX]{#N1}",
                     "FLEX": "FLEX[v|h, c|s|e|sb|sa, c|s|e|st, gap, scroll?]{#N2,#N3}",
                     "NAV": "NAV[100%, 56, #BG_HEX]{#N_tab1}",
+                    "ROUTER": "ROUTER[#N_initial_screen]{#N_screen1,#N_screen2} (switched via @tap->NAV(#N_screen2))",
                     "LIST": "LIST[v|h, gap, noscroll?]{#N_item}",
                     "TXT": "TXT[font_size, weight, #COLOR_HEX]{\"Text {#S0}\"}",
                     "INP": "INP[width, height, radius, #BG_HEX, #S_bound]{\"Placeholder\"}",

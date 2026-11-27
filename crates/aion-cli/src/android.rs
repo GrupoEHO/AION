@@ -554,6 +554,9 @@ public class MainActivity extends Activity {{
     private String apiBaseUrl = "http://10.0.2.2:8080";
     private final Map<String, Object> signals = new HashMap<>();
     private final Map<String, JSONObject> nodeMap = new HashMap<>();
+    private final Map<String, String> parentMap = new HashMap<>();
+    private final Map<String, String> activeScreens = new HashMap<>();
+    private final Map<String, View> viewMap = new HashMap<>();
     private final List<TextBinding> textBindings = new ArrayList<>();
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -587,7 +590,21 @@ public class MainActivity extends Activity {{
             JSONArray nodes = bundle.getJSONObject("program").getJSONArray("nodes");
             for (int i = 0; i < nodes.length(); i++) {{
                 JSONObject n = nodes.getJSONObject(i);
-                nodeMap.put(n.getString("id"), n.getJSONObject("kind"));
+                String nid = n.getString("id");
+                JSONObject kind = n.getJSONObject("kind");
+                nodeMap.put(nid, kind);
+                if ("ui".equals(kind.optString("node_type")) && "ROUTER".equals(kind.optString("widget"))) {{
+                    JSONArray args = kind.optJSONArray("args");
+                    String initial = getStringArg(args, 0, null);
+                    if (initial == null) {{
+                        JSONObject body = kind.optJSONObject("body");
+                        if (body != null && "children".equals(body.optString("body_kind"))) {{
+                            JSONArray ch = body.optJSONArray("value");
+                            if (ch != null && ch.length() > 0) initial = ch.optString(0, null);
+                        }}
+                    }}
+                    if (initial != null) activeScreens.put(nid, initial);
+                }}
             }}
 
             setContentView(renderStage());
@@ -685,13 +702,59 @@ public class MainActivity extends Activity {{
             int h = Math.max(1, Math.round((float) box.getDouble("height") * scale));
             int x = Math.round((float) box.getDouble("x") * scale);
             int y = Math.round((float) box.getDouble("y") * scale);
+            String pId = box.optString("parent", null);
+            if (pId != null && !pId.isEmpty() && !"null".equals(pId)) parentMap.put(id, pId);
+            viewMap.put(id, view);
             FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(w, h);
             lp.leftMargin = x;
             lp.topMargin = y;
             stage.addView(view, lp);
         }}
 
+        applyRouterVisibility();
         return stage;
+    }}
+
+    private boolean isNodeVisible(String id) {{
+        String cur = id;
+        while (cur != null) {{
+            String p = parentMap.get(cur);
+            if (p == null) break;
+            JSONObject pUi = nodeMap.get(p);
+            if (pUi != null && "ROUTER".equals(pUi.optString("widget"))) {{
+                String active = activeScreens.get(p);
+                if (active != null && !active.equals(cur)) return false;
+            }}
+            cur = p;
+        }}
+        return true;
+    }}
+
+    private void applyRouterVisibility() {{
+        for (Map.Entry<String, View> e : viewMap.entrySet()) {{
+            e.getValue().setVisibility(isNodeVisible(e.getKey()) ? View.VISIBLE : View.GONE);
+        }}
+    }}
+
+    private void navigateTo(String targetId) {{
+        for (Map.Entry<String, JSONObject> e : nodeMap.entrySet()) {{
+            JSONObject ui = e.getValue();
+            if ("ui".equals(ui.optString("node_type")) && "ROUTER".equals(ui.optString("widget"))) {{
+                JSONObject body = ui.optJSONObject("body");
+                if (body != null && "children".equals(body.optString("body_kind"))) {{
+                    JSONArray ch = body.optJSONArray("value");
+                    if (ch != null) {{
+                        for (int i = 0; i < ch.length(); i++) {{
+                            if (targetId.equals(ch.optString(i))) {{
+                                activeScreens.put(e.getKey(), targetId);
+                                applyRouterVisibility();
+                                return;
+                            }}
+                        }}
+                    }}
+                }}
+            }}
+        }}
     }}
 
     private void handleNodeClick(JSONObject ui) {{
@@ -700,7 +763,20 @@ public class MainActivity extends Activity {{
         JSONObject tap = findEvent(events, "tap");
         if (tap == null) return;
         JSONObject act = tap.optJSONObject("action");
-        if (act == null || !"call".equals(act.optString("action_kind"))) return;
+        if (act == null) return;
+        String actKind = act.optString("action_kind");
+        if ("generic".equals(actKind) && "NAV".equals(act.optString("name"))) {{
+            JSONArray navArgs = act.optJSONArray("args");
+            if (navArgs != null && navArgs.length() > 0) {{
+                JSONObject first = navArgs.optJSONObject(0);
+                if (first != null && first.optJSONObject("kind") != null) {{
+                    String target = first.getJSONObject("kind").optString("value", null);
+                    if (target != null) navigateTo(target);
+                }}
+            }}
+            return;
+        }}
+        if (!"call".equals(actKind)) return;
 
         String apiId = act.optString("api");
         JSONObject apiNode = nodeMap.get(apiId);

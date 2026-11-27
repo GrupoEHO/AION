@@ -100,10 +100,28 @@ Supports `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, Gin-style `:id` or `{id}` rout
 - `ROOT[pad_x, pad_y, width, height, bg_hex]{#N1}` — Root container (`100%, 100%`).
 - `FLEX[dir(v|h), justify(c|s|e|sb|sa), align(c|s|e|st), gap, scroll?]{#N2,#N3}` — Flexbox container.
 - `NAV[width, height, bg_hex]{#N_tab1,#N_tab2}` — Horizontal navigation bar.
+- `ROUTER[#N_initial_screen]{#N_screen1,#N_screen2,...}` — Multi-screen container (shows ONLY the active screen; switches live via `@tap->NAV(#N_screen2)` without restarting or creating extra servers).
 - `LIST[dir(v|h), gap, noscroll?]{#N_item}` — Scrollable list container.
 - `TXT[font_size, weight, color_hex]{"Text with {#S0} interpolation"}` — Text label.
 - `INP[width, height, radius, bg_hex, #S_bound]{"Placeholder..."}` — Text input bound to signal `#S_bound`.
 - `BTN[width, height, radius, bg_hex]{#N_label} @tap->... @err->...` — Interactive button.
+
+### Multi-Screen Navigation Rule (IMPORTANT)
+**NEVER** create multiple `#SRV` servers or multiple `.aion` apps for separate screens. Always use **ONE `#SRV0`** and **ONE `#N_router:ROUTER[#N_screen1]{#N_screen1,#N_screen2}`** switched from `NAV` buttons via `@tap->NAV(#N_screen2)`:
+```aion
+#N0:ROOT[0,0,100%,100%,#F8FAFC]{#N1}
+#N1:FLEX[v,s,s,0]{#N2,#N3}
+#N2:NAV[100%,56,#0F172A]{#N10,#N11}
+#N3:ROUTER[#N20]{#N20,#N30}
+#N10:BTN[120,36,6,#2563EB]{#N12} @tap->NAV(#N20)
+#N11:BTN[120,36,6,#334155]{#N13} @tap->NAV(#N30)
+#N12:TXT[14,600,#FFFFFF]{"Presupuesto"}
+#N13:TXT[14,600,#FFFFFF]{"Tarjetas"}
+#N20:FLEX[v,s,c,16]{#N21}
+#N21:TXT[20,700,#0F172A]{"Pantalla Presupuesto"}
+#N30:FLEX[v,s,c,16]{#N31}
+#N31:TXT[20,700,#0F172A]{"Pantalla Tarjetas"}
+```
 
 ### UI Event Handlers
 - API Call with signal binding (requires `@err` on the same node!):
