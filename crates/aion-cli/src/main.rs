@@ -10,6 +10,7 @@ use aion_checker::check_program;
 use aion_cli::android::{build_android_aab, AndroidBuildOptions};
 use aion_cli::mcp::serve_mcp_stdio;
 use aion_cli::web::serve_web;
+use aion_cli::web_build::{build_web_bundle, ProjectMeta, WebBuildOptions};
 use aion_cli::{build_registry, cmd_check, cmd_create, cmd_parse, cmd_patch};
 use aion_parser::parse_program;
 use aion_runtime_net::{serve, RuntimeConfig};
@@ -45,7 +46,7 @@ fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
         eprintln!(
-            "Usage:\n  aion create <name> [dir]\n  aion parse <file.aion>\n  aion check <file.aion> [--manifests-dir <dir>]\n  aion patch <file.aion> <patch.json> [--manifests-dir <dir>]\n  aion build android <file.aion> [--app-id <id>] [--name <name>] [--version-code <n>] [--version-name <ver>] [--api-base-url <url>] [--out <dir>] [--debug] [--generate-only]\n  aion run <file.aion> [--manifests-dir <dir>]\n  aion web <file.aion> [--manifests-dir <dir>]\n  aion mcp [--manifests-dir <dir>]"
+            "Usage:\n  aion create <name> [dir]\n  aion parse <file.aion>\n  aion check <file.aion> [--manifests-dir <dir>]\n  aion patch <file.aion> <patch.json> [--manifests-dir <dir>]\n  aion build appbundle [--release|--debug] [file.aion] [--app-id <id>] [--name <name>] [--out <dir>]\n  aion build web [--release|--debug] [file.aion] [--name <name>] [--api-base-url <url>] [--out <dir>]\n  aion run <file.aion> [--manifests-dir <dir>]\n  aion web <file.aion> [--manifests-dir <dir>]\n  aion mcp [--manifests-dir <dir>]"
         );
         process::exit(2);
     }
@@ -119,12 +120,24 @@ fn main() {
             }
         }
         "build" => {
-            if args.len() < 4 || args[2] != "android" {
-                eprintln!("Usage: aion build android <file.aion> [--app-id com.aion.app] [--name \"App\"] [--version-code 1] [--version-name 0.1.0] [--api-base-url http://10.0.2.2:8080] [--out build/android] [--debug] [--generate-only]");
+            if args.len() < 3 {
+                eprintln!("Usage:\n  aion build appbundle [--release|--debug] [file.aion]\n  aion build web [--release|--debug] [file.aion]");
                 process::exit(2);
             }
-            let file_path = Path::new(&args[3]);
-            let src = read_file_or_exit(file_path);
+            let target = args[2].as_str();
+            let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            let meta = ProjectMeta::load_from_dir(&cwd);
+
+            // Optional positional `.aion` path (if omitted, reads `entry` from `aion.toml` or `app.aion`).
+            let file_path = args
+                .get(3)
+                .filter(|a| !a.starts_with('-'))
+                .map(PathBuf::from)
+                .unwrap_or_else(|| {
+                    PathBuf::from(meta.entry.clone().unwrap_or_else(|| "app.aion".to_string()))
+                });
+
+            let src = read_file_or_exit(&file_path);
             let reg = build_registry(Some(&manifests_dir)).unwrap_or_else(|e| {
                 eprintln!("{{\"ok\":false,\"error\":\"{e}\"}}");
                 process::exit(1);
@@ -143,52 +156,111 @@ fn main() {
                 process::exit(1);
             }
 
-            let mut opts = AndroidBuildOptions::default();
-            if let Some(v) = find_flag(&args, "--app-id") {
-                opts.app_id = v;
-            }
-            if let Some(v) = find_flag(&args, "--name") {
-                opts.app_name = v;
-            }
-            if let Some(v) = find_flag(&args, "--version-code") {
-                opts.version_code = v.parse().unwrap_or(1);
-            }
-            if let Some(v) = find_flag(&args, "--version-name") {
-                opts.version_name = v;
-            }
-            if let Some(v) = find_flag(&args, "--api-base-url") {
-                opts.api_base_url = Some(v);
-            }
-            if let Some(v) = find_flag(&args, "--out") {
-                opts.out_dir = PathBuf::from(v);
-            }
-            if let Some(v) = find_flag(&args, "--keystore") {
-                opts.keystore = Some(PathBuf::from(v));
-            }
-            if let Some(v) = find_flag(&args, "--keystore-pass") {
-                opts.keystore_pass = Some(v);
-            }
-            if let Some(v) = find_flag(&args, "--key-alias") {
-                opts.key_alias = Some(v);
-            }
-            if let Some(v) = find_flag(&args, "--key-pass") {
-                opts.key_pass = Some(v);
-            }
-            opts.debug = args.iter().any(|a| a == "--debug");
-            opts.generate_only = args.iter().any(|a| a == "--generate-only");
+            let is_debug = args.iter().any(|a| a == "--debug");
+            let is_release = args.iter().any(|a| a == "--release") || !is_debug;
 
-            match build_android_aab(&prog, &opts) {
-                Ok(res) => println!("{}", serde_json::to_string_pretty(&res).unwrap()),
-                Err(err) => {
-                    println!(
-                        "{}",
-                        serde_json::to_string_pretty(&serde_json::json!({
-                            "ok": false,
-                            "error": err
-                        }))
-                        .unwrap()
-                    );
-                    process::exit(1);
+            match target {
+                "appbundle" | "android" => {
+                    let mut opts = AndroidBuildOptions::default();
+                    if let Some(ref name) = meta.name {
+                        opts.app_name = name.clone();
+                        let safe_pkg: String = name
+                            .chars()
+                            .filter(|c| c.is_ascii_alphanumeric())
+                            .map(|c| c.to_ascii_lowercase())
+                            .collect();
+                        if !safe_pkg.is_empty() {
+                            opts.app_id = format!("com.aion.{safe_pkg}");
+                        }
+                    }
+                    if let Some(ref app_id) = meta.app_id {
+                        opts.app_id = app_id.clone();
+                    }
+                    if let Some(ref ver) = meta.version {
+                        opts.version_name = ver.clone();
+                    }
+                    if let Some(v) = find_flag(&args, "--app-id") {
+                        opts.app_id = v;
+                    }
+                    if let Some(v) = find_flag(&args, "--name") {
+                        opts.app_name = v;
+                    }
+                    if let Some(v) = find_flag(&args, "--version-code") {
+                        opts.version_code = v.parse().unwrap_or(1);
+                    }
+                    if let Some(v) = find_flag(&args, "--version-name") {
+                        opts.version_name = v;
+                    }
+                    if let Some(v) = find_flag(&args, "--api-base-url") {
+                        opts.api_base_url = Some(v);
+                    }
+                    if let Some(v) = find_flag(&args, "--out") {
+                        opts.out_dir = PathBuf::from(v);
+                    }
+                    if let Some(v) = find_flag(&args, "--keystore") {
+                        opts.keystore = Some(PathBuf::from(v));
+                    }
+                    if let Some(v) = find_flag(&args, "--keystore-pass") {
+                        opts.keystore_pass = Some(v);
+                    }
+                    if let Some(v) = find_flag(&args, "--key-alias") {
+                        opts.key_alias = Some(v);
+                    }
+                    if let Some(v) = find_flag(&args, "--key-pass") {
+                        opts.key_pass = Some(v);
+                    }
+                    opts.debug = is_debug;
+                    opts.generate_only = args.iter().any(|a| a == "--generate-only");
+
+                    match build_android_aab(&prog, &opts) {
+                        Ok(res) => println!("{}", serde_json::to_string_pretty(&res).unwrap()),
+                        Err(err) => {
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&serde_json::json!({
+                                    "ok": false,
+                                    "error": err
+                                }))
+                                .unwrap()
+                            );
+                            process::exit(1);
+                        }
+                    }
+                }
+                "web" => {
+                    let mut opts = WebBuildOptions::default();
+                    if let Some(ref name) = meta.name {
+                        opts.app_name = name.clone();
+                    }
+                    if let Some(v) = find_flag(&args, "--name") {
+                        opts.app_name = v;
+                    }
+                    if let Some(v) = find_flag(&args, "--api-base-url") {
+                        opts.api_base_url = Some(v);
+                    }
+                    if let Some(v) = find_flag(&args, "--out") {
+                        opts.out_dir = PathBuf::from(v);
+                    }
+                    opts.release = is_release;
+
+                    match build_web_bundle(&prog, &opts) {
+                        Ok(res) => println!("{}", serde_json::to_string_pretty(&res).unwrap()),
+                        Err(err) => {
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&serde_json::json!({
+                                    "ok": false,
+                                    "error": err
+                                }))
+                                .unwrap()
+                            );
+                            process::exit(1);
+                        }
+                    }
+                }
+                other => {
+                    eprintln!("Unknown build target `{other}`. Expected `appbundle` (or `android`) or `web`.");
+                    process::exit(2);
                 }
             }
         }

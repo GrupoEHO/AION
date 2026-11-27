@@ -242,6 +242,21 @@ fn tool_definitions() -> Value {
                     "generate_only": { "type": "boolean", "default": false }
                 }
             }
+        },
+        {
+            "name": "aion_build_web",
+            "description": "Validate an AION program and compile a standalone static Web bundle (index.html, aion_bundle.json, schema.proto) ready for hosting.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["source"],
+                "properties": {
+                    "source": { "type": "string", "description": "AION source code." },
+                    "app_name": { "type": "string", "default": "AION App" },
+                    "api_base_url": { "type": "string" },
+                    "out_dir": { "type": "string", "default": "build/web" },
+                    "release": { "type": "boolean", "default": true }
+                }
+            }
         }
     ])
 }
@@ -476,6 +491,38 @@ fn call_tool(
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
             match crate::android::build_android_aab(&prog, &opts) {
+                Ok(res) => Ok((serde_json::to_value(res).unwrap(), false)),
+                Err(err) => Ok((json!({ "ok": false, "error": err }), true)),
+            }
+        }
+        "aion_build_web" => {
+            let source = args
+                .get("source")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "missing required string argument `source`".to_string())?;
+            let prog = match parse_program(source) {
+                Ok(p) => p,
+                Err(diags) => {
+                    let report = DiagnosticReport::from_diagnostics(diags);
+                    return Ok((serde_json::to_value(report).unwrap(), true));
+                }
+            };
+            let report = check_program(&prog, registry);
+            if !report.ok {
+                return Ok((serde_json::to_value(report).unwrap(), true));
+            }
+            let mut opts = crate::web_build::WebBuildOptions::default();
+            if let Some(v) = args.get("app_name").and_then(Value::as_str) {
+                opts.app_name = v.to_string();
+            }
+            if let Some(v) = args.get("api_base_url").and_then(Value::as_str) {
+                opts.api_base_url = Some(v.to_string());
+            }
+            if let Some(v) = args.get("out_dir").and_then(Value::as_str) {
+                opts.out_dir = std::path::PathBuf::from(v);
+            }
+            opts.release = args.get("release").and_then(Value::as_bool).unwrap_or(true);
+            match crate::web_build::build_web_bundle(&prog, &opts) {
                 Ok(res) => Ok((serde_json::to_value(res).unwrap(), false)),
                 Err(err) => Ok((json!({ "ok": false, "error": err }), true)),
             }

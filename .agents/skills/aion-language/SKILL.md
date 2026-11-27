@@ -24,8 +24,9 @@ description: >-
   - `aion check <file.aion>` — Validates syntax, types, cycles, `#EXT` calls, `@err`, and layout (`mobile` + `desktop`) as JSON.
   - `aion parse <file.aion>` — Outputs flat AST JSON.
   - `aion patch <file.aion> <patch.json>` — Applies transactional `ADD`/`PATCH`/`DEL` AST patches and validates.
-  - `aion web <file.aion>` — Runs live HTTP/Protobuf backend + interactive Web Preview at `http://127.0.0.1:8080`.
-  - `aion build android <file.aion> [--app-id com.aion.app] [--name "App"] [--out build/android]` — Validates and compiles a native Android App Bundle (`.aab`) via Gradle.
+  - `aion web <file.aion>` — Runs live HTTP/Protobuf backend + interactive Web Preview (with Hot Reload & Hot Restart) at `http://127.0.0.1:8080`.
+  - `aion build appbundle --release [file.aion]` (or `aion build android`) — Validates and compiles a native Android App Bundle (`.aab`) via Gradle (auto-reads `aion.toml` when `[file.aion]` is omitted).
+  - `aion build web --release [file.aion]` — Validates and compiles a static production Web bundle (`build/web/index.html`, `aion_bundle.json`, `schema.proto`).
   - `aion run <file.aion>` — Runs production `axum` + Protobuf backend server.
 - **MCP Tools (`aion` server):**
   - `aion_create`: Scaffold a new AION project (`{ name, dir? }`).
@@ -35,6 +36,7 @@ description: >-
   - `aion_layout_tree`: Compute Taffy layout boxes & detect overflows (`{ source, viewport?: "mobile" | "desktop" }`).
   - `aion_spec`: Returns the concise AION grammar and examples.
   - `aion_build_android`: Compiles an AION program into an Android App Bundle (`.aab`).
+  - `aion_build_web`: Compiles an AION program into a standalone static Web bundle (`build/web/`).
 
 ## 3. Primitive & Composite Types
 - Primitives: `i32`, `f64`, `str`, `bool`, `bytes`, `ts`, `void`, `any`

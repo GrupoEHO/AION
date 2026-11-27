@@ -1,6 +1,7 @@
 pub mod android;
 pub mod mcp;
 pub mod web;
+pub mod web_build;
 
 use std::fs;
 use std::path::Path;
@@ -370,7 +371,8 @@ mod tests {
                 "aion_layout_tree",
                 "aion_create",
                 "aion_spec",
-                "aion_build_android"
+                "aion_build_android",
+                "aion_build_web"
             ]
         );
 
@@ -491,5 +493,32 @@ mod tests {
         assert!(ev_restart.contains("\"hot_restart\""));
 
         let _ = fs::remove_file(&tmp_file);
+    }
+
+    #[test]
+    fn web_build_release_emits_static_hosting_bundle() {
+        let prog = parse_program(EXAMPLE_AION).unwrap();
+        let tmp = std::env::temp_dir().join(format!("aion_web_dist_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+
+        let opts = crate::web_build::WebBuildOptions {
+            app_name: "Nidox Web".to_string(),
+            api_base_url: Some("https://api.nidox.app".to_string()),
+            out_dir: tmp.clone(),
+            release: true,
+        };
+        let res = crate::web_build::build_web_bundle(&prog, &opts).unwrap();
+        assert!(res.ok);
+        assert_eq!(res.mode, "release");
+        assert!(tmp.join("index.html").is_file());
+        assert!(tmp.join("aion_bundle.json").is_file());
+        assert!(tmp.join("schema.proto").is_file());
+
+        let bundle_raw = fs::read_to_string(tmp.join("aion_bundle.json")).unwrap();
+        assert!(bundle_raw.contains("https://api.nidox.app"));
+        assert!(bundle_raw.contains("\"mobile\""));
+        assert!(bundle_raw.contains("\"desktop\""));
+
+        let _ = fs::remove_dir_all(&tmp);
     }
 }
