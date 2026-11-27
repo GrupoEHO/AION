@@ -467,8 +467,8 @@ fn ui_node_to_style(ui: &UiNode, signals: Option<&SignalStore>) -> (Style, bool)
             };
             (style, false)
         }
-        "INP" => {
-            // INP[width, height, radius, bg_hex, #S_bound?]{"placeholder"}
+        "INP" | "SEL" | "SELECT" => {
+            // INP/SEL[width, height, radius, bg_hex, #S_bound?]{"placeholder" | "opt1","opt2"}
             let width = arg_as_dim(ui.args.first()).unwrap_or_else(|| length(240.0_f32));
             let height = arg_as_dim(ui.args.get(1)).unwrap_or_else(|| length(44.0_f32));
             let style = Style {

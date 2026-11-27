@@ -277,6 +277,7 @@ pub enum UiBody {
         template: String,
         interpolations: Vec<NodeId>,
     },
+    Options(Vec<String>),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

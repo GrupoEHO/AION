@@ -200,6 +200,43 @@ mod tests {
     }
 
     #[test]
+    fn validates_sel_dropdown_multi_tap_and_local_math() {
+        let src = r#"
+#S_moneda:str = "MXN"
+#S_monto:f64 = 100.0
+#S_tasa:f64 = 1.0
+#S_total:f64 = 100.0
+#N_root:ROOT[0,0,100%,100%,#F8FAFC]{#N_sel,#N_btn}
+#N_sel:SEL[320,44,8,#FFFFFF,#S_moneda]{"MXN|Peso", "USD|Dolar"} @change->#S_total=#S_monto*#S_tasa
+#N_btn:BTN[200,40,8,#2563EB]{} @tap->#S_tasa=0.055 @tap->#S_total=#S_monto*#S_tasa @tap->TOAST("ok")
+"#;
+        let prog = parse_program(src).expect("should parse SEL + multi tap");
+        let reg = mock_registry();
+        let report = check_program(&prog, &reg);
+        assert!(report.ok, "{}", report.to_json_pretty().unwrap());
+        let sel = prog.get(&aion_ast::NodeId::new("#N_sel")).unwrap();
+        match &sel.kind {
+            aion_ast::NodeKind::Ui(ui) => {
+                assert!(matches!(&ui.body, aion_ast::UiBody::Options(o) if o.len() == 2));
+            }
+            _ => panic!("expected ui"),
+        }
+        let btn = prog.get(&aion_ast::NodeId::new("#N_btn")).unwrap();
+        match &btn.kind {
+            aion_ast::NodeKind::Ui(ui) => assert_eq!(ui.events.len(), 3),
+            _ => panic!("expected ui"),
+        }
+        // Round trip through the canonical formatter.
+        let again = parse_program(&aion_ast::format_program(&prog)).expect("reparse");
+        assert_eq!(again.nodes.len(), prog.nodes.len());
+
+        // Binding SEL to an undeclared signal must fail.
+        let bad = src.replace("#S_moneda]{", "#S_nope]{");
+        let bad_prog = parse_program(&bad).unwrap();
+        assert!(!check_program(&bad_prog, &reg).ok);
+    }
+
+    #[test]
     fn validates_semantic_ids_persist_init_and_dynamic_list_with_push_remove() {
         let src = r#"
 #SRV0:HTTP[port:8080, proto:on]

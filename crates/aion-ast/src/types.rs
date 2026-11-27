@@ -91,6 +91,7 @@ impl AionType {
             return false;
         }
         match (self, expected) {
+            (AionType::I32, AionType::F64) => true,
             (AionType::List(a), AionType::List(b)) => a.is_assignable_to(b),
             (AionType::Map(k1, v1), AionType::Map(k2, v2)) => {
                 k1.is_assignable_to(k2) && v1.is_assignable_to(v2)

@@ -137,6 +137,10 @@ pub fn format_flat_node(node: &FlatNode, out: &mut String) {
                 UiBody::Text { template, .. } => {
                     let _ = write!(out, "{{{}}}", escape_str(template));
                 }
+                UiBody::Options(opts) => {
+                    let quoted: Vec<String> = opts.iter().map(|s| escape_str(s)).collect();
+                    let _ = write!(out, "{{{}}}", quoted.join(", "));
+                }
             }
             for ev in &ui.events {
                 out.push(' ');

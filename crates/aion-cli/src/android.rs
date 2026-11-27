@@ -521,11 +521,14 @@ import android.util.DisplayMetrics;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
+import android.widget.AdapterView;
+import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
+import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -560,6 +563,7 @@ public class MainActivity extends Activity {{
     private String apiBaseUrl = "http://10.0.2.2:8080";
     private final Map<String, Object> signals = new HashMap<>();
     private final Set<String> persistedSignals = new HashSet<>();
+    private final Map<String, String> signalTypes = new HashMap<>();
     private final Map<String, JSONObject> nodeMap = new HashMap<>();
     private final Map<String, String> parentMap = new HashMap<>();
     private final Map<String, String> activeScreens = new HashMap<>();
@@ -603,8 +607,9 @@ public class MainActivity extends Activity {{
                 String nid = n.getString("id");
                 JSONObject kind = n.getJSONObject("kind");
                 nodeMap.put(nid, kind);
-                if ("signal".equals(kind.optString("node_type")) && kind.optBoolean("persist", false)) {{
+                if ("signal".equals(kind.optString("node_type"))) {{
                     persistedSignals.add(nid);
+                    signalTypes.put(nid, kind.optString("ty", ""));
                     String saved = prefs.getString(nid, null);
                     if (saved != null) {{
                         try {{ signals.put(nid, new JSONTokener(saved).nextValue()); }} catch (Exception ignored) {{}}
@@ -689,7 +694,7 @@ public class MainActivity extends Activity {{
                     inp.addTextChangedListener(new TextWatcher() {{
                         @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) {{}}
                         @Override public void onTextChanged(CharSequence s, int a, int b, int c) {{
-                            signals.put(boundSig, s.toString());
+                            signals.put(boundSig, coerceSignal(boundSig, s.toString()));
                             savePersistedSignals();
                             updateTexts();
                         }}
@@ -697,6 +702,39 @@ public class MainActivity extends Activity {{
                     }});
                 }}
                 view = inp;
+            }} else if ("SEL".equals(widget) || "SELECT".equals(widget)) {{
+                Spinner spinner = new Spinner(this);
+                float radius = getFloatArg(args, 2, 8f) * scale;
+                String bg = getStringArg(args, 3, "#FFFFFF");
+                String boundSig = getStringArg(args, 4, null);
+                spinner.setBackground(makeInputBg(bg, radius));
+                List<String[]> opts = extractSelectOptions(ui);
+                List<String> labels = new ArrayList<>();
+                int selIdx = 0;
+                String curVal = boundSig != null && signals.get(boundSig) != null ? String.valueOf(signals.get(boundSig)) : "";
+                for (int oi = 0; oi < opts.size(); oi++) {{
+                    labels.add(resolveText(opts.get(oi)[1], null));
+                    if (opts.get(oi)[0].equals(curVal)) selIdx = oi;
+                }}
+                spinner.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, labels));
+                spinner.setSelection(selIdx, false);
+                spinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {{
+                    @Override public void onItemSelected(AdapterView<?> parent, View v, int pos, long id) {{
+                        if (pos < 0 || pos >= opts.size()) return;
+                        String newVal = opts.get(pos)[0];
+                        String prev = boundSig != null && signals.get(boundSig) != null ? String.valueOf(signals.get(boundSig)) : "";
+                        if (newVal.equals(prev)) return;
+                        if (boundSig != null) {{
+                            signals.put(boundSig, coerceSignal(boundSig, newVal));
+                            savePersistedSignals();
+                        }}
+                        runNodeEvent(ui, "change", null, -1);
+                        runNodeEvent(ui, "tap", null, -1);
+                        updateTexts();
+                    }}
+                    @Override public void onNothingSelected(AdapterView<?> parent) {{}}
+                }});
+                view = spinner;
             }} else if ("TXT".equals(widget)) {{
                 TextView txt = new TextView(this);
                 float fontSize = getFloatArg(args, 0, 16f);
@@ -839,9 +877,43 @@ public class MainActivity extends Activity {{
         SharedPreferences.Editor ed = getSharedPreferences("aion_persist", MODE_PRIVATE).edit();
         for (String id : persistedSignals) {{
             Object val = signals.get(id);
-            if (val != null) ed.putString(id, String.valueOf(val));
+            if (val == null) continue;
+            ed.putString(id, (val instanceof String) ? JSONObject.quote((String) val) : String.valueOf(val));
         }}
         ed.apply();
+    }}
+
+    private Object coerceSignal(String sigId, String raw) {{
+        String ty = signalTypes.get(sigId);
+        try {{
+            if ("I32".equals(ty)) return Integer.parseInt(raw.trim());
+            if ("F64".equals(ty)) return Double.parseDouble(raw.trim());
+        }} catch (Exception e) {{
+            return "I32".equals(ty) ? (Object) Integer.valueOf(0) : (Object) Double.valueOf(0.0);
+        }}
+        return raw;
+    }}
+
+    private List<String[]> extractSelectOptions(JSONObject ui) {{
+        List<String[]> out = new ArrayList<>();
+        JSONObject body = ui.optJSONObject("body");
+        List<String> raw = new ArrayList<>();
+        if (body != null) {{
+            String bk = body.optString("body_kind");
+            if ("options".equals(bk)) {{
+                JSONArray arr = body.optJSONArray("value");
+                if (arr != null) for (int i = 0; i < arr.length(); i++) raw.add(arr.optString(i));
+            }} else if ("text".equals(bk)) {{
+                JSONObject v = body.optJSONObject("value");
+                String tpl = v != null ? v.optString("template", "") : "";
+                for (String s : tpl.split(",")) if (!s.trim().isEmpty()) raw.add(s.trim());
+            }}
+        }}
+        for (String entry : raw) {{
+            int bar = entry.indexOf('|');
+            out.add(bar >= 0 ? new String[]{{entry.substring(0, bar), entry.substring(bar + 1)}} : new String[]{{entry, entry}});
+        }}
+        return out;
     }}
 
     private boolean isNodeVisible(String id) {{
@@ -898,10 +970,16 @@ public class MainActivity extends Activity {{
     private void runNodeEvent(JSONObject ui, String eventName, Object itemCtx, int indexCtx) {{
         JSONArray events = ui.optJSONArray("events");
         if (events == null) return;
-        JSONObject tap = findEvent(events, eventName);
-        if (tap == null) return;
-        JSONObject act = tap.optJSONObject("action");
-        if (act == null) return;
+        for (int ei = 0; ei < events.length(); ei++) {{
+            JSONObject handler = events.optJSONObject(ei);
+            if (handler == null || !eventName.equals(handler.optString("event"))) continue;
+            JSONObject hAct = handler.optJSONObject("action");
+            if (hAct == null) continue;
+            runSingleAction(events, hAct, itemCtx, indexCtx);
+        }}
+    }}
+
+    private void runSingleAction(JSONArray events, JSONObject act, Object itemCtx, int indexCtx) {{
         String actKind = act.optString("action_kind");
         if ("generic".equals(actKind)) {{
             String gName = act.optString("name");
@@ -1068,7 +1146,35 @@ public class MainActivity extends Activity {{
             }}
             return out;
         }}
+        if ("binary".equals(k)) {{
+            JSONObject v = kind.optJSONObject("value");
+            if (v == null) return null;
+            String op = v.optString("op");
+            Object l = evalExpr(v.optJSONObject("left"), resObj, itemCtx, indexCtx);
+            Object r = evalExpr(v.optJSONObject("right"), resObj, itemCtx, indexCtx);
+            double ln = toNum(l), rn = toNum(r);
+            switch (op) {{
+                case "Add":
+                    if (l instanceof String || r instanceof String) return String.valueOf(l == null ? "" : l) + String.valueOf(r == null ? "" : r);
+                    return ln + rn;
+                case "Sub": return ln - rn;
+                case "Mul": return ln * rn;
+                case "Div": return rn != 0 ? ln / rn : 0.0;
+                case "Eq": return String.valueOf(l).equals(String.valueOf(r));
+                case "Ne": return !String.valueOf(l).equals(String.valueOf(r));
+                case "Lt": return ln < rn;
+                case "Le": return ln <= rn;
+                case "Gt": return ln > rn;
+                case "Ge": return ln >= rn;
+                default: return null;
+            }}
+        }}
         return null;
+    }}
+
+    private static double toNum(Object o) {{
+        if (o instanceof Number) return ((Number) o).doubleValue();
+        try {{ return Double.parseDouble(String.valueOf(o)); }} catch (Exception e) {{ return 0.0; }}
     }}
 
     private void updateTexts() {{

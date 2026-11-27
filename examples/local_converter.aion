@@ -1,0 +1,16 @@
+// 100% local app (no backend): SEL dropdown, multiple @tap handlers, local math, auto-persisted state.
+#S_moneda:str = "MXN"
+#S_monto:f64 = 100.0
+#S_tasa:f64 = 1.0
+#S_resultado:f64 = 100.0
+#S_historial:list<str> = []
+
+#N_root:ROOT[16,16,100%,100%,#F8FAFC]{#N_main}
+#N_main:FLEX[v,s,st,12]{#N_titulo,#N_sel,#N_btn_usd,#N_total,#N_btn_log}
+#N_titulo:TXT[22,700,#0F172A]{"Conversor local ({#S_moneda})"}
+#N_sel:SEL[320,44,8,#FFFFFF,#S_moneda]{"MXN|Peso MXN", "USD|Dolar USD", "EUR|Euro EUR"} @change->#S_resultado=#S_monto*#S_tasa
+#N_btn_usd:BTN[320,44,8,#2563EB]{#N_btn_usd_txt} @tap->#S_tasa=0.055 @tap->#S_resultado=#S_monto*0.055 @tap->TOAST("Tasa USD aplicada")
+#N_btn_usd_txt:TXT[15,600,#FFFFFF]{"Usar tasa USD"}
+#N_total:TXT[18,600,#0F172A]{"Total: {#S_resultado}"}
+#N_btn_log:BTN[320,44,8,#16A34A]{#N_btn_log_txt} @tap->PUSH(#S_historial,"Total " + #S_resultado)
+#N_btn_log_txt:TXT[15,600,#FFFFFF]{"Guardar en historial"}

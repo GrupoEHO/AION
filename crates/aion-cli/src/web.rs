@@ -46,6 +46,7 @@ const WEB_SHELL_HTML: &str = r#"<!doctype html>
     .aion-btn:hover { opacity: .9; }
     .aion-inp { border: 1px solid #CBD5E1; padding: 0 12px; color: #0F172A; font-size: 14px; outline: none; }
     .aion-inp:focus { border-color: #2563EB; box-shadow: 0 0 0 2px rgba(37,99,235,.2); }
+    .aion-sel { border: 1px solid #CBD5E1; padding: 0 10px; color: #0F172A; font-size: 14px; outline: none; cursor: pointer; }
     .aion-txt { white-space: nowrap; pointer-events: none; }
     aside { background: #111827; border-left: 1px solid #1F2937; padding: 16px; overflow: auto; display: flex; flex-direction: column; gap: 14px; }
     h3 { margin: 0 0 6px; font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: #94A3B8; }
@@ -87,19 +88,25 @@ const WEB_SHELL_HTML: &str = r#"<!doctype html>
   <script>
     let bundle = null;
     let signals = {};
+    let signalTypes = {};
     let persistedSet = new Set();
     let activeScreens = {};
     let didInitRoot = false;
     let currentViewport = 'mobile';
+    const STORAGE_PREFIX = 'aion_state:' + (location.pathname || 'root') + ':';
 
-    function syncPersistedSignals(loadFromStorage) {
+    function syncPersistedSignals(loadFromStorage, clearStorage) {
       persistedSet.clear();
+      signalTypes = {};
       for (const n of bundle.program.nodes) {
-        if (n.kind?.node_type === 'signal' && n.kind.persist) {
+        if (n.kind?.node_type === 'signal') {
+          signalTypes[n.id] = n.kind.ty;
           persistedSet.add(n.id);
-          if (loadFromStorage) {
+          if (clearStorage) {
+            try { localStorage.removeItem(STORAGE_PREFIX + n.id); } catch (_) {}
+          } else if (loadFromStorage) {
             try {
-              const raw = localStorage.getItem('aion_persist:' + n.id);
+              const raw = localStorage.getItem(STORAGE_PREFIX + n.id);
               if (raw !== null) signals[n.id] = JSON.parse(raw);
             } catch (_) {}
           }
@@ -110,9 +117,33 @@ const WEB_SHELL_HTML: &str = r#"<!doctype html>
     function savePersistedSignals() {
       for (const id of persistedSet) {
         try {
-          localStorage.setItem('aion_persist:' + id, JSON.stringify(signals[id]));
+          localStorage.setItem(STORAGE_PREFIX + id, JSON.stringify(signals[id]));
         } catch (_) {}
       }
+    }
+
+    function coerceSignalValue(sigId, rawVal) {
+      const ty = signalTypes[sigId];
+      if (ty === 'I32') { const n = parseInt(rawVal, 10); return Number.isNaN(n) ? 0 : n; }
+      if (ty === 'F64') { const n = parseFloat(rawVal); return Number.isNaN(n) ? 0 : n; }
+      if (ty === 'Bool') return Boolean(rawVal);
+      return rawVal;
+    }
+
+    function extractSelectOptions(ui) {
+      let raw = [];
+      if (ui.body?.body_kind === 'options') raw = ui.body.value || [];
+      else if (ui.body?.body_kind === 'text' && ui.body.value?.template) {
+        raw = ui.body.value.template.split(',').map(s => s.trim()).filter(Boolean);
+      } else if (ui.args?.[5]?.arg_kind === 'node_ref') {
+        const arr = signals[ui.args[5].value];
+        if (Array.isArray(arr)) raw = arr.map(x => String(x));
+      }
+      return raw.map(entry => {
+        const s = String(entry);
+        const bar = s.indexOf('|');
+        return bar >= 0 ? { value: s.slice(0, bar), label: s.slice(bar + 1) } : { value: s, label: s };
+      });
     }
 
     function initRouters() {
@@ -240,93 +271,108 @@ const WEB_SHELL_HTML: &str = r#"<!doctype html>
         const l = evalExpr(v.left, resObj, itemCtx);
         const r = evalExpr(v.right, resObj, itemCtx);
         switch (v.op) {
-          case 'Add': return (Number(l) || 0) + (Number(r) || 0);
+          case 'Add': return (typeof l === 'string' || typeof r === 'string') ? (String(l ?? '') + String(r ?? '')) : ((Number(l) || 0) + (Number(r) || 0));
           case 'Sub': return (Number(l) || 0) - (Number(r) || 0);
           case 'Mul': return (Number(l) || 0) * (Number(r) || 0);
           case 'Div': return Number(r) ? (Number(l) / Number(r)) : 0;
           case 'Eq': return l === r;
           case 'Ne': return l !== r;
+          case 'Lt': return Number(l) < Number(r);
+          case 'Le': return Number(l) <= Number(r);
+          case 'Gt': return Number(l) > Number(r);
+          case 'Ge': return Number(l) >= Number(r);
+          case 'And': return Boolean(l) && Boolean(r);
+          case 'Or': return Boolean(l) || Boolean(r);
         }
       }
       return null;
     }
 
     async function runNodeEvent(ui, evName, itemCtx) {
-      const handler = (ui.events || []).find(e => e.event === evName);
-      if (!handler) return;
-      const act = handler.action;
-      if (act.action_kind === 'generic') {
-        if (act.name === 'NAV') {
-          const target = act.args?.[0]?.kind?.value;
-          if (target) navigateTo(target);
-          return;
-        }
-        if (act.name === 'PUSH') {
-          const sigId = act.args?.[0]?.kind?.value;
-          const elem = evalExpr(act.args?.[1], null, itemCtx);
-          if (sigId) {
-            const cur = Array.isArray(signals[sigId]) ? [...signals[sigId]] : [];
-            cur.push(elem);
-            signals[sigId] = cur;
-            savePersistedSignals();
-            renderStage();
-          }
-          return;
-        }
-        if (act.name === 'REMOVE') {
-          const sigId = act.args?.[0]?.kind?.value;
-          const target = evalExpr(act.args?.[1], null, itemCtx);
-          if (sigId && Array.isArray(signals[sigId])) {
-            const cur = [...signals[sigId]];
-            if (typeof target === 'number') cur.splice(target, 1);
-            else {
-              const idx = cur.indexOf(target);
-              if (idx >= 0) cur.splice(idx, 1);
+      const handlers = (ui.events || []).filter(e => e.event === evName);
+      if (!handlers.length) return;
+      let needsRender = false;
+
+      for (const handler of handlers) {
+        const act = handler.action;
+        if (act.action_kind === 'generic') {
+          if (act.name === 'NAV') {
+            const target = act.args?.[0]?.kind?.value;
+            if (target) {
+              savePersistedSignals();
+              navigateTo(target);
+              needsRender = false;
             }
-            signals[sigId] = cur;
-            savePersistedSignals();
-            renderStage();
+            continue;
           }
-          return;
+          if (act.name === 'PUSH') {
+            const sigId = act.args?.[0]?.kind?.value;
+            const elem = evalExpr(act.args?.[1], null, itemCtx);
+            if (sigId) {
+              const cur = Array.isArray(signals[sigId]) ? [...signals[sigId]] : [];
+              cur.push(elem);
+              signals[sigId] = cur;
+              needsRender = true;
+            }
+            continue;
+          }
+          if (act.name === 'REMOVE') {
+            const sigId = act.args?.[0]?.kind?.value;
+            const target = evalExpr(act.args?.[1], null, itemCtx);
+            if (sigId && Array.isArray(signals[sigId])) {
+              const cur = [...signals[sigId]];
+              if (typeof target === 'number') cur.splice(target, 1);
+              else {
+                const idx = cur.indexOf(target);
+                if (idx >= 0) cur.splice(idx, 1);
+              }
+              signals[sigId] = cur;
+              needsRender = true;
+            }
+            continue;
+          }
+        }
+        if (act.action_kind === 'toast') {
+          showToast(String(evalExpr(act.message, null, itemCtx) ?? ''));
+          continue;
+        }
+        if (act.action_kind === 'set') {
+          signals[act.signal] = evalExpr(act.value, null, itemCtx);
+          needsRender = true;
+          continue;
+        }
+        if (act.action_kind === 'call') {
+          const apiNode = bundle.program.nodes.find(n => n.id === act.api)?.kind;
+          if (!apiNode) continue;
+          const payload = evalExpr(act.payload, null, itemCtx) || {};
+          try {
+            const resp = await fetch(apiNode.path, {
+              method: apiNode.method.toUpperCase(),
+              headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+              body: apiNode.method.toUpperCase() === 'GET' ? undefined : JSON.stringify(payload)
+            });
+            const data = await resp.json();
+            document.getElementById('api-view').textContent = JSON.stringify(data, null, 2);
+            if (!resp.ok) throw new Error(data.error || ('HTTP ' + resp.status));
+            if (act.bind) {
+              signals[act.bind.signal] = evalExpr(act.bind.value, data, itemCtx);
+              needsRender = true;
+            }
+            showToast('Respuesta OK de ' + act.api);
+          } catch (err) {
+            const errHandler = (ui.events || []).find(e => e.event === 'err');
+            if (errHandler && errHandler.action.action_kind === 'toast') {
+              showToast(evalExpr(errHandler.action.message, null, itemCtx) || String(err));
+            } else {
+              showToast('Error: ' + err.message);
+            }
+          }
         }
       }
-      if (act.action_kind === 'toast') {
-        showToast(evalExpr(act.message, null, itemCtx) || '');
-        return;
-      }
-      if (act.action_kind === 'set') {
-        signals[act.signal] = evalExpr(act.value, null, itemCtx);
+
+      if (needsRender) {
         savePersistedSignals();
         renderStage();
-        return;
-      }
-      if (act.action_kind === 'call') {
-        const apiNode = bundle.program.nodes.find(n => n.id === act.api)?.kind;
-        if (!apiNode) return;
-        const payload = evalExpr(act.payload, null, itemCtx) || {};
-        try {
-          const resp = await fetch(apiNode.path, {
-            method: apiNode.method.toUpperCase(),
-            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-            body: apiNode.method.toUpperCase() === 'GET' ? undefined : JSON.stringify(payload)
-          });
-          const data = await resp.json();
-          document.getElementById('api-view').textContent = JSON.stringify(data, null, 2);
-          if (!resp.ok) throw new Error(data.error || ('HTTP ' + resp.status));
-          if (act.bind) {
-            signals[act.bind.signal] = evalExpr(act.bind.value, data, itemCtx);
-            savePersistedSignals();
-            renderStage();
-          }
-          showToast('Respuesta OK de ' + act.api);
-        } catch (err) {
-          const errHandler = (ui.events || []).find(e => e.event === 'err');
-          if (errHandler && errHandler.action.action_kind === 'toast') {
-            showToast(evalExpr(errHandler.action.message, null, itemCtx) || String(err));
-          } else {
-            showToast('Error: ' + err.message);
-          }
-        }
       }
     }
 
@@ -429,11 +475,37 @@ const WEB_SHELL_HTML: &str = r#"<!doctype html>
           if (boundSig) {
             el.value = signals[boundSig] ?? '';
             el.addEventListener('input', e => {
-              signals[boundSig] = e.target.value;
+              signals[boundSig] = coerceSignalValue(boundSig, e.target.value);
               savePersistedSignals();
               updateSignalsUI();
             });
           }
+        } else if (ui.widget === 'SEL' || ui.widget === 'SELECT') {
+          el = document.createElement('select');
+          el.className = 'aion-node aion-sel';
+          const radius = ui.args[2]?.value ?? 6;
+          const bg = ui.args[3]?.value ?? '#FFFFFF';
+          const boundSig = ui.args[4]?.value;
+          el.style.borderRadius = radius + 'px';
+          el.style.background = bg;
+          const opts = extractSelectOptions(ui);
+          const curVal = boundSig ? String(signals[boundSig] ?? '') : '';
+          for (const o of opts) {
+            const optEl = document.createElement('option');
+            optEl.value = o.value;
+            optEl.textContent = resolveText(o.label, null);
+            if (o.value === curVal) optEl.selected = true;
+            el.appendChild(optEl);
+          }
+          el.addEventListener('change', async e => {
+            if (boundSig) {
+              signals[boundSig] = coerceSignalValue(boundSig, e.target.value);
+              savePersistedSignals();
+            }
+            await runNodeEvent(ui, 'change', null);
+            await runNodeEvent(ui, 'tap', null);
+            renderStage();
+          });
         } else if (ui.widget === 'TXT') {
           el = document.createElement('span');
           el.className = 'aion-node aion-txt';
@@ -447,6 +519,9 @@ const WEB_SHELL_HTML: &str = r#"<!doctype html>
         } else {
           el = document.createElement('div');
           el.className = 'aion-node';
+          const isScrollFlex = ui.widget === 'FLEX' && (ui.args || []).some(a => a.value === 'scroll');
+          el.style.pointerEvents = (ui.widget === 'LIST' || isScrollFlex) ? 'auto' : 'none';
+          if (isScrollFlex) el.style.overflow = 'auto';
           if (ui.widget === 'ROOT' && ui.args[4]?.value) el.style.background = ui.args[4].value;
           if (ui.widget === 'NAV' && ui.args[2]?.value) el.style.background = ui.args[2].value;
           if (ui.widget === 'LIST') {
@@ -484,15 +559,16 @@ const WEB_SHELL_HTML: &str = r#"<!doctype html>
       document.getElementById('btn-desktop').classList.toggle('active', vp === 'desktop');
       const resp = await fetch('/__aion/bundle.json?viewport=' + vp);
       bundle = await resp.json();
-      if (resetSignals || Object.keys(signals).length === 0) {
+      const isInitialLoad = Object.keys(signals).length === 0;
+      if (resetSignals || isInitialLoad) {
         signals = { ...bundle.signals };
-        syncPersistedSignals(true);
+        syncPersistedSignals(isInitialLoad && !resetSignals, resetSignals && !isInitialLoad);
       } else {
         // Hot Reload: preserve existing #S values and only add newly declared signals.
         for (const [k, v] of Object.entries(bundle.signals)) {
           if (!(k in signals)) signals[k] = v;
         }
-        syncPersistedSignals(false);
+        syncPersistedSignals(false, false);
       }
       document.getElementById('proto-view').textContent = bundle.proto;
       document.getElementById('status-badge').textContent =

@@ -773,7 +773,30 @@ impl<'a> Checker<'a> {
                             node.span,
                         );
                     }
-                    UiBody::Empty => {}
+                    UiBody::Empty | UiBody::Options(_) => {}
+                }
+
+                if matches!(ui.widget.as_str(), "INP" | "SEL" | "SELECT") {
+                    if let Some(UiArg::NodeRef(sig_id)) = ui.args.get(4) {
+                        if !self.signals.contains_key(sig_id) {
+                            self.diagnostics.push(
+                                Diagnostic::error(
+                                    "E_UNKNOWN_NODE",
+                                    Phase::Checker,
+                                    format!(
+                                        "UI widget `{}` ({}) binds to undefined signal `{sig_id}`",
+                                        node.id, ui.widget
+                                    ),
+                                    node.span,
+                                )
+                                .with_node_id(node.id.as_str())
+                                .with_fix_hint(format!(
+                                    "Declare signal `{sig_id}` before binding it to `{}`.",
+                                    node.id
+                                )),
+                            );
+                        }
+                    }
                 }
 
                 let has_err_handler = ui.events.iter().any(|h| h.event == "err");
@@ -1477,7 +1500,7 @@ impl<'a> Checker<'a> {
             }
             ExprKind::Binary { op, left, right } => {
                 let lty = self.eval_expr(node_id, left, locals, api_ctx);
-                let _rty = self.eval_expr(node_id, right, locals, api_ctx);
+                let rty = self.eval_expr(node_id, right, locals, api_ctx);
                 match op {
                     BinaryOp::Eq
                     | BinaryOp::Ne
@@ -1487,6 +1510,12 @@ impl<'a> Checker<'a> {
                     | BinaryOp::Ge
                     | BinaryOp::And
                     | BinaryOp::Or => AionType::Bool,
+                    BinaryOp::Add if lty == AionType::Str || rty == AionType::Str => AionType::Str,
+                    BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div
+                        if lty == AionType::F64 || rty == AionType::F64 =>
+                    {
+                        AionType::F64
+                    }
                     _ => lty,
                 }
             }

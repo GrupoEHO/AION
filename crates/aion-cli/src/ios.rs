@@ -870,6 +870,7 @@ final class AionStore: ObservableObject {
     @Published var toastMessage: String? = nil
     @Published var loadError: String? = nil
 
+    var signalTypes: [String: String] = [:]
     var persistedSignals: Set<String> = []
     var apiBaseUrl: String = "http://127.0.0.1:8080"
     var viewportWidth: CGFloat = 390
@@ -906,7 +907,10 @@ final class AionStore: ObservableObject {
                       let kind = n["kind"] as? [String: Any] else { continue }
                 nodeMap[nid] = kind
                 let nt = kind["node_type"] as? String ?? ""
-                if nt == "signal", (kind["persist"] as? Bool) == true {
+                if nt == "signal" {
+                    if let tyStr = kind["ty"] as? String {
+                        signalTypes[nid] = tyStr
+                    }
                     persistedSignals.insert(nid)
                     if let savedStr = UserDefaults.standard.string(forKey: "aion_persist:" + nid),
                        let savedData = savedStr.data(using: .utf8),
@@ -1043,8 +1047,35 @@ final class AionStore: ObservableObject {
     }
 
     func setSignal(_ id: String, value: Any) {
-        signals[id] = value
+        if let s = value as? String {
+            let ty = signalTypes[id] ?? ""
+            if ty == "I32" { signals[id] = Int(s) ?? 0 }
+            else if ty == "F64" { signals[id] = Double(s) ?? 0.0 }
+            else { signals[id] = s }
+        } else {
+            signals[id] = value
+        }
         savePersistedSignals()
+    }
+
+    func extractSelectOptions(_ ui: [String: Any]) -> [(value: String, label: String)] {
+        var raw: [String] = []
+        if let body = ui["body"] as? [String: Any] {
+            let bk = body["body_kind"] as? String ?? ""
+            if bk == "options", let opts = body["value"] as? [String] {
+                raw = opts
+            } else if bk == "text",
+                      let v = body["value"] as? [String: Any],
+                      let tpl = v["template"] as? String {
+                raw = tpl.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            }
+        }
+        return raw.map { entry in
+            if let idx = entry.firstIndex(of: "|") {
+                return (String(entry[..<idx]), String(entry[entry.index(after: idx)...]))
+            }
+            return (entry, entry)
+        }
     }
 
     func handleNodeClick(_ ui: [String: Any]) {
@@ -1052,9 +1083,14 @@ final class AionStore: ObservableObject {
     }
 
     func runNodeEvent(_ ui: [String: Any], eventName: String, item: Any?, index: Int?) {
-        guard let events = ui["events"] as? [[String: Any]],
-              let handler = events.first(where: { ($0["event"] as? String) == eventName }),
-              let act = handler["action"] as? [String: Any] else { return }
+        guard let events = ui["events"] as? [[String: Any]] else { return }
+        for handler in events where (handler["event"] as? String) == eventName {
+            guard let act = handler["action"] as? [String: Any] else { continue }
+            runSingleAction(act, events: events, item: item, index: index)
+        }
+    }
+
+    private func runSingleAction(_ act: [String: Any], events: [[String: Any]], item: Any?, index: Int?) {
 
         let actKind = act["action_kind"] as? String ?? ""
         if actKind == "generic" {
@@ -1206,6 +1242,30 @@ final class AionStore: ObservableObject {
                 }
             }
             return out
+        case "binary":
+            if let val = kind["value"] as? [String: Any] {
+                let op = val["op"] as? String ?? ""
+                let l = evalExpr(val["left"] as? [String: Any], res: res, item: item, index: index)
+                let r = evalExpr(val["right"] as? [String: Any], res: res, item: item, index: index)
+                let ln = (l as? NSNumber)?.doubleValue ?? Double("\(l)") ?? 0
+                let rn = (r as? NSNumber)?.doubleValue ?? Double("\(r)") ?? 0
+                switch op {
+                case "Add":
+                    if l is String || r is String { return "\(stringifyValue(l))\(stringifyValue(r))" }
+                    return ln + rn
+                case "Sub": return ln - rn
+                case "Mul": return ln * rn
+                case "Div": return rn != 0 ? (ln / rn) : 0
+                case "Eq": return stringifyValue(l) == stringifyValue(r)
+                case "Ne": return stringifyValue(l) != stringifyValue(r)
+                case "Lt": return ln < rn
+                case "Le": return ln <= rn
+                case "Gt": return ln > rn
+                case "Ge": return ln >= rn
+                default: return 0
+                }
+            }
+            return ""
         default:
             return ""
         }
@@ -1304,8 +1364,48 @@ struct AionNodeView: View {
         switch widget {
         case "ROOT":
             Color(aionHex: store.argString(args, 4, "#F8FAFC"))
+                .allowsHitTesting(false)
         case "NAV":
             Color(aionHex: store.argString(args, 2, "#0F172A"))
+                .allowsHitTesting(false)
+        case "SEL", "SELECT":
+            let radius = store.argFloat(args, 2, 8) * scale
+            let bg = store.argString(args, 3, "#FFFFFF")
+            let boundSig = store.argStringOpt(args, 4)
+            let options = store.extractSelectOptions(ui)
+            let curVal = boundSig.map { store.signalString($0) } ?? ""
+            let curLabel = options.first(where: { $0.value == curVal })?.label ?? curVal
+            Menu {
+                ForEach(Array(options.enumerated()), id: \.offset) { _, opt in
+                    Button(store.resolveText(opt.label)) {
+                        if let sig = boundSig {
+                            store.setSignal(sig, value: opt.value)
+                        }
+                        store.runNodeEvent(ui, eventName: "change", item: nil, index: nil)
+                        store.runNodeEvent(ui, eventName: "tap", item: nil, index: nil)
+                    }
+                }
+            } label: {
+                HStack {
+                    Text(store.resolveText(curLabel))
+                        .font(.system(size: 14 * scale))
+                        .foregroundColor(Color(aionHex: "#0F172A"))
+                    Spacer()
+                    Text("▾")
+                        .font(.system(size: 13 * scale))
+                        .foregroundColor(Color(aionHex: "#64748B"))
+                }
+                .padding(.horizontal, 12 * scale)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(
+                    RoundedRectangle(cornerRadius: radius)
+                        .fill(Color(aionHex: bg))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: radius)
+                                .stroke(Color(aionHex: "#CBD5E1"), lineWidth: 1)
+                        )
+                )
+            }
         case "BTN":
             let radius = store.argFloat(args, 2, 8) * scale
             let bg = store.argString(args, 3, "#2563EB")
@@ -1369,6 +1469,7 @@ struct AionNodeView: View {
             }
         default:
             Color.clear
+                .allowsHitTesting(false)
         }
     }
 }

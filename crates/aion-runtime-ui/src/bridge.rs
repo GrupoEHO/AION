@@ -189,113 +189,125 @@ impl UiRuntime {
             None => return Err(UiError::Bridge(format!("unknown UI node `{node_id}`"))),
         };
 
-        let Some(handler) = ui.events.iter().find(|h| h.event == event_name) else {
+        let matching_handlers: Vec<_> = ui
+            .events
+            .iter()
+            .filter(|h| h.event == event_name)
+            .cloned()
+            .collect();
+        if matching_handlers.is_empty() {
             return Ok(DispatchOutcome::NoOp);
-        };
+        }
 
-        match &handler.action {
-            EventAction::Call { api, payload, bind } => {
-                // 1. Enter @loading state.
-                self.loading_nodes.insert(node_id.clone());
-                self.events_log
-                    .push(UiLifecycleEvent::LoadingStarted(node_id.clone()));
-                if let Some(loading_handler) = ui.events.iter().find(|h| h.event == "loading") {
-                    self.run_local_action(&loading_handler.action, None)?;
-                }
+        let mut last_response = ExtValue::Void;
+        let mut all_dirtied: Vec<NodeId> = Vec::new();
 
-                // 2. Locate target `#API` and `#SRV`.
-                let api_node = self.find_api(api)?.clone();
-                let base_url = self.resolve_server_url(&api_node.srv_ref);
-
-                // 3. Serialize `IN` payload into binary Protobuf.
-                let payload_val = eval_ui_expr(payload, &self.signals, None);
-                let body = self
-                    .schema
-                    .encode_input(api, &payload_val)
-                    .map_err(|e| UiError::Bridge(format!("protobuf encode error: {e}")))?;
-
-                let mut headers = self.default_headers.clone();
-                headers.insert("content-type".to_string(), PROTOBUF_MIME.to_string());
-                headers.insert("accept".to_string(), PROTOBUF_MIME.to_string());
-
-                let req = UiHttpRequest {
-                    method: api_node.method,
-                    base_url,
-                    path: api_node.path.clone(),
-                    headers,
-                    body,
-                };
-
-                // 4. Execute request over transport.
-                let transport_res = self.transport.send(req).await;
-
-                // 5. Exit @loading state.
-                self.loading_nodes.remove(node_id);
-                self.events_log
-                    .push(UiLifecycleEvent::LoadingFinished(node_id.clone()));
-
-                let resp = match transport_res {
-                    Ok(r) if (200..300).contains(&r.status) => r,
-                    Ok(r) => {
-                        let err_msg = format!("HTTP {}", r.status);
-                        if let Some(err_handler) = ui.events.iter().find(|h| h.event == "err") {
-                            self.run_local_action(&err_handler.action, None)?;
-                        }
-                        return Ok(DispatchOutcome::ErrorHandled {
-                            status: Some(r.status),
-                            message: err_msg,
-                        });
+        for handler in &matching_handlers {
+            match &handler.action {
+                EventAction::Call { api, payload, bind } => {
+                    // 1. Enter @loading state.
+                    self.loading_nodes.insert(node_id.clone());
+                    self.events_log
+                        .push(UiLifecycleEvent::LoadingStarted(node_id.clone()));
+                    if let Some(loading_handler) = ui.events.iter().find(|h| h.event == "loading") {
+                        self.run_local_action(&loading_handler.action, None)?;
                     }
-                    Err(net_err) => {
-                        if let Some(err_handler) = ui.events.iter().find(|h| h.event == "err") {
-                            self.run_local_action(&err_handler.action, None)?;
+
+                    // 2. Locate target `#API` and `#SRV`.
+                    let api_node = self.find_api(api)?.clone();
+                    let base_url = self.resolve_server_url(&api_node.srv_ref);
+
+                    // 3. Serialize `IN` payload into binary Protobuf.
+                    let payload_val = eval_ui_expr(payload, &self.signals, None);
+                    let body = self
+                        .schema
+                        .encode_input(api, &payload_val)
+                        .map_err(|e| UiError::Bridge(format!("protobuf encode error: {e}")))?;
+
+                    let mut headers = self.default_headers.clone();
+                    headers.insert("content-type".to_string(), PROTOBUF_MIME.to_string());
+                    headers.insert("accept".to_string(), PROTOBUF_MIME.to_string());
+
+                    let req = UiHttpRequest {
+                        method: api_node.method,
+                        base_url,
+                        path: api_node.path.clone(),
+                        headers,
+                        body,
+                    };
+
+                    // 4. Execute request over transport.
+                    let transport_res = self.transport.send(req).await;
+
+                    // 5. Exit @loading state.
+                    self.loading_nodes.remove(node_id);
+                    self.events_log
+                        .push(UiLifecycleEvent::LoadingFinished(node_id.clone()));
+
+                    let resp = match transport_res {
+                        Ok(r) if (200..300).contains(&r.status) => r,
+                        Ok(r) => {
+                            let err_msg = format!("HTTP {}", r.status);
+                            if let Some(err_handler) = ui.events.iter().find(|h| h.event == "err") {
+                                self.run_local_action(&err_handler.action, None)?;
+                            }
+                            return Ok(DispatchOutcome::ErrorHandled {
+                                status: Some(r.status),
+                                message: err_msg,
+                            });
                         }
-                        return Ok(DispatchOutcome::ErrorHandled {
-                            status: None,
-                            message: net_err,
+                        Err(net_err) => {
+                            if let Some(err_handler) = ui.events.iter().find(|h| h.event == "err") {
+                                self.run_local_action(&err_handler.action, None)?;
+                            }
+                            return Ok(DispatchOutcome::ErrorHandled {
+                                status: None,
+                                message: net_err,
+                            });
+                        }
+                    };
+
+                    // 6. Decode `OUT` payload (Protobuf or JSON fallback).
+                    let decoded = if resp.content_type.contains("protobuf") {
+                        self.schema
+                            .decode_output(api, &resp.body)
+                            .map_err(|e| UiError::Bridge(format!("protobuf decode error: {e}")))?
+                    } else if resp.body.is_empty() {
+                        ExtValue::Void
+                    } else {
+                        let jv: serde_json::Value = serde_json::from_slice(&resp.body)
+                            .map_err(|e| UiError::Bridge(format!("json decode error: {e}")))?;
+                        json_to_ext_value(&jv)
+                    };
+
+                    // 7. Apply signal binding `=> #S0 = res.pts`.
+                    if let Some(assign) = bind {
+                        let bound_ext = eval_ui_expr(&assign.value, &self.signals, Some(&decoded));
+                        let sig_val = ext_to_signal_value(&bound_ext);
+                        let dirtied = self.signals.set(&assign.signal, sig_val)?;
+                        self.events_log.push(UiLifecycleEvent::SignalUpdated {
+                            signal: assign.signal.clone(),
+                            dirtied: dirtied.clone(),
                         });
+                        all_dirtied.extend(dirtied);
                     }
-                };
-
-                // 6. Decode `OUT` payload (Protobuf or JSON fallback).
-                let decoded = if resp.content_type.contains("protobuf") {
-                    self.schema
-                        .decode_output(api, &resp.body)
-                        .map_err(|e| UiError::Bridge(format!("protobuf decode error: {e}")))?
-                } else if resp.body.is_empty() {
-                    ExtValue::Void
-                } else {
-                    let jv: serde_json::Value = serde_json::from_slice(&resp.body)
-                        .map_err(|e| UiError::Bridge(format!("json decode error: {e}")))?;
-                    json_to_ext_value(&jv)
-                };
-
-                // 7. Apply signal binding `=> #S0 = res.pts`.
-                let mut dirtied_nodes = Vec::new();
-                if let Some(assign) = bind {
-                    let bound_ext = eval_ui_expr(&assign.value, &self.signals, Some(&decoded));
-                    let sig_val = ext_to_signal_value(&bound_ext);
-                    let dirtied = self.signals.set(&assign.signal, sig_val)?;
-                    self.events_log.push(UiLifecycleEvent::SignalUpdated {
-                        signal: assign.signal.clone(),
-                        dirtied: dirtied.clone(),
-                    });
-                    dirtied_nodes = dirtied;
+                    last_response = decoded;
                 }
-
-                Ok(DispatchOutcome::Ok {
-                    response: decoded,
-                    dirtied_nodes,
-                })
-            }
-            other => {
-                self.run_local_action(other, None)?;
-                Ok(DispatchOutcome::Ok {
-                    response: ExtValue::Void,
-                    dirtied_nodes: self.signals.dirty_nodes().iter().cloned().collect(),
-                })
+                other => {
+                    self.run_local_action(other, None)?;
+                    for d in self.signals.dirty_nodes() {
+                        if !all_dirtied.contains(d) {
+                            all_dirtied.push(d.clone());
+                        }
+                    }
+                }
             }
         }
+
+        Ok(DispatchOutcome::Ok {
+            response: last_response,
+            dirtied_nodes: all_dirtied,
+        })
     }
 
     fn run_local_action(

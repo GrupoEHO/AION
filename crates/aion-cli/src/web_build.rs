@@ -309,6 +309,7 @@ fn generate_wasm_index_html(app_name: &str) -> String {
     .aion-btn:hover {{ opacity: .9; }}
     .aion-inp {{ border: 1px solid #CBD5E1; padding: 0 12px; color: #0F172A; font-size: 14px; outline: none; }}
     .aion-inp:focus {{ border-color: #2563EB; box-shadow: 0 0 0 2px rgba(37,99,235,.2); }}
+    .aion-sel {{ border: 1px solid #CBD5E1; padding: 0 10px; color: #0F172A; font-size: 14px; outline: none; cursor: pointer; }}
     .aion-txt {{ white-space: nowrap; pointer-events: none; }}
     #toast {{ position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #0F172A; color: #F8FAFC; padding: 10px 18px; border-radius: 8px; display: none; font-size: 14px; z-index: 99; box-shadow: 0 10px 25px rgba(0,0,0,.25); }}
   </style>
@@ -321,7 +322,75 @@ fn generate_wasm_index_html(app_name: &str) -> String {
 
     let bundle = null;
     let wasmApp = null;
+    let signalTypes = {{}};
+    let persistedSet = new Set();
     let activeScreens = {{}};
+    const STORAGE_PREFIX = 'aion_state:' + (location.pathname || 'root') + ':';
+
+    function currentSignals() {{
+      return JSON.parse(wasmApp.signals_json());
+    }}
+
+    function initPersisted() {{
+      for (const n of bundle.program.nodes) {{
+        if (n.kind?.node_type === 'signal') {{
+          signalTypes[n.id] = n.kind.ty;
+          persistedSet.add(n.id);
+          try {{
+            const raw = localStorage.getItem(STORAGE_PREFIX + n.id);
+            if (raw !== null) wasmApp.set_signal(n.id, raw);
+          }} catch (_) {{}}
+        }}
+      }}
+    }}
+
+    function savePersisted() {{
+      const sigs = currentSignals();
+      for (const id of persistedSet) {{
+        try {{ localStorage.setItem(STORAGE_PREFIX + id, JSON.stringify(sigs[id])); }} catch (_) {{}}
+      }}
+    }}
+
+    function coerceVal(sigId, rawVal) {{
+      const ty = signalTypes[sigId];
+      if (ty === 'I32') {{ const n = parseInt(rawVal, 10); return Number.isNaN(n) ? 0 : n; }}
+      if (ty === 'F64') {{ const n = parseFloat(rawVal); return Number.isNaN(n) ? 0 : n; }}
+      if (ty === 'Bool') return Boolean(rawVal);
+      return rawVal;
+    }}
+
+    function extractSelectOptions(ui, signals) {{
+      let raw = [];
+      if (ui.body?.body_kind === 'options') raw = ui.body.value || [];
+      else if (ui.body?.body_kind === 'text' && ui.body.value?.template) {{
+        raw = ui.body.value.template.split(',').map(s => s.trim()).filter(Boolean);
+      }} else if (ui.args?.[5]?.arg_kind === 'node_ref') {{
+        const arr = signals[ui.args[5].value];
+        if (Array.isArray(arr)) raw = arr.map(x => String(x));
+      }}
+      return raw.map(entry => {{
+        const s = String(entry);
+        const bar = s.indexOf('|');
+        return bar >= 0 ? {{ value: s.slice(0, bar), label: s.slice(bar + 1) }} : {{ value: s, label: s }};
+      }});
+    }}
+
+    function getDynamicListSig(ui) {{
+      if (!ui || ui.widget !== 'LIST') return null;
+      const ref = (ui.args || []).find(a => a.arg_kind === 'node_ref');
+      return ref ? ref.value : null;
+    }}
+
+    function isInsideDynamicListTemplate(id, nodeMap, parentMap) {{
+      let cur = id;
+      while (cur) {{
+        const p = parentMap[cur];
+        if (!p) break;
+        if (getDynamicListSig(nodeMap[p])) return true;
+        cur = p;
+      }}
+      return false;
+    }}
 
     function initRouters() {{
       for (const n of bundle.program.nodes) {{
@@ -335,6 +404,7 @@ fn generate_wasm_index_html(app_name: &str) -> String {
     }}
 
     function isNodeVisible(id, nodeMap, parentMap) {{
+      if (isInsideDynamicListTemplate(id, nodeMap, parentMap)) return false;
       let cur = id;
       while (cur) {{
         const p = parentMap[cur];
@@ -354,6 +424,8 @@ fn generate_wasm_index_html(app_name: &str) -> String {
           if (children.includes(targetId)) {{
             activeScreens[n.id] = targetId;
             renderStage();
+            const screenUi = bundle.program.nodes.find(x => x.id === targetId)?.kind;
+            if (screenUi) runNodeEvent(screenUi, 'init', null);
             return true;
           }}
         }}
@@ -369,72 +441,202 @@ fn generate_wasm_index_html(app_name: &str) -> String {
       window._toastTimer = setTimeout(() => el.style.display = 'none', 3000);
     }}
 
-    function currentSignals() {{
-      return JSON.parse(wasmApp.signals_json());
+    function resolveText(tpl, signals, itemCtx) {{
+      let out = wasmApp.resolve_text(tpl);
+      if (itemCtx && itemCtx.item !== undefined) {{
+        if (itemCtx.item && typeof itemCtx.item === 'object') {{
+          for (const [fk, fv] of Object.entries(itemCtx.item)) {{
+            out = out.replaceAll('{{item.' + fk + '}}', String(fv ?? ''));
+          }}
+        }} else {{
+          out = out.replaceAll('{{item}}', String(itemCtx.item ?? ''));
+        }}
+      }}
+      return out;
     }}
 
-    function evalExpr(expr, resObj, signals) {{
+    function evalExpr(expr, resObj, signals, itemCtx) {{
       if (!expr || !expr.kind) return null;
       const k = expr.kind.expr_kind;
       const v = expr.kind.value;
       if (k === 'int' || k === 'float' || k === 'str' || k === 'bool') return v;
       if (k === 'node_ref') return signals[v];
-      if (k === 'ident') return v === 'res' ? resObj : null;
+      if (k === 'ident') {{
+        if (v === 'res') return resObj;
+        if (v === 'item') return itemCtx?.item;
+        if (v === 'index') return itemCtx?.index;
+        return null;
+      }}
       if (k === 'member') {{
-        const obj = evalExpr(v.object, resObj, signals);
+        const obj = evalExpr(v.object, resObj, signals, itemCtx);
         return obj && typeof obj === 'object' ? obj[v.field] : null;
       }}
       if (k === 'object') {{
         const obj = {{}};
-        for (const [key, valExpr] of v) obj[key] = evalExpr(valExpr, resObj, signals);
+        for (const [key, valExpr] of v) obj[key] = evalExpr(valExpr, resObj, signals, itemCtx);
         return obj;
+      }}
+      if (k === 'list') return (v || []).map(x => evalExpr(x, resObj, signals, itemCtx));
+      if (k === 'binary') {{
+        const l = evalExpr(v.left, resObj, signals, itemCtx);
+        const r = evalExpr(v.right, resObj, signals, itemCtx);
+        switch (v.op) {{
+          case 'Add': return (typeof l === 'string' || typeof r === 'string') ? (String(l ?? '') + String(r ?? '')) : ((Number(l) || 0) + (Number(r) || 0));
+          case 'Sub': return (Number(l) || 0) - (Number(r) || 0);
+          case 'Mul': return (Number(l) || 0) * (Number(r) || 0);
+          case 'Div': return Number(r) ? (Number(l) / Number(r)) : 0;
+          case 'Eq': return l === r;
+          case 'Ne': return l !== r;
+          case 'Lt': return Number(l) < Number(r);
+          case 'Le': return Number(l) <= Number(r);
+          case 'Gt': return Number(l) > Number(r);
+          case 'Ge': return Number(l) >= Number(r);
+          case 'And': return Boolean(l) && Boolean(r);
+          case 'Or': return Boolean(l) || Boolean(r);
+        }}
       }}
       return null;
     }}
 
     function refreshTexts() {{
+      const sigs = currentSignals();
       for (const el of document.querySelectorAll('[data-template]')) {{
-        el.textContent = wasmApp.resolve_text(el.dataset.template);
+        el.textContent = resolveText(el.dataset.template, sigs, null);
       }}
     }}
 
-    async function handleNodeClick(ui) {{
-      const tap = (ui.events || []).find(e => e.event === 'tap');
-      if (!tap) return;
-      const act = tap.action;
-      if (act.action_kind === 'generic' && act.name === 'NAV') {{
-        const target = act.args?.[0]?.kind?.value;
-        if (target) navigateTo(target);
-        return;
-      }}
-      if (act.action_kind === 'call') {{
-        const apiNode = bundle.program.nodes.find(n => n.id === act.api)?.kind;
-        if (!apiNode) return;
+    async function runNodeEvent(ui, evName, itemCtx) {{
+      const handlers = (ui.events || []).filter(e => e.event === evName);
+      if (!handlers.length) return;
+      let needsRender = false;
+
+      for (const handler of handlers) {{
         const signals = currentSignals();
-        const payload = evalExpr(act.payload, null, signals) || {{}};
-        const base = (bundle.apiBaseUrl || '').replace(/\/+$/, '');
-        try {{
-          const resp = await fetch(base + apiNode.path, {{
-            method: apiNode.method.toUpperCase(),
-            headers: {{ 'Content-Type': 'application/json', 'Accept': 'application/json' }},
-            body: apiNode.method.toUpperCase() === 'GET' ? undefined : JSON.stringify(payload)
-          }});
-          const data = await resp.json();
-          if (!resp.ok) throw new Error(data.error || ('HTTP ' + resp.status));
-          if (act.bind) {{
-            const nextVal = evalExpr(act.bind.value, data, signals);
-            wasmApp.set_signal(act.bind.signal, JSON.stringify(nextVal));
-            refreshTexts();
+        const act = handler.action;
+        if (act.action_kind === 'generic') {{
+          if (act.name === 'NAV') {{
+            const target = act.args?.[0]?.kind?.value;
+            if (target) {{
+              savePersisted();
+              navigateTo(target);
+              needsRender = false;
+            }}
+            continue;
           }}
-        }} catch (err) {{
-          const errHandler = (ui.events || []).find(e => e.event === 'err');
-          if (errHandler && errHandler.action.action_kind === 'toast') {{
-            showToast(evalExpr(errHandler.action.message, null, signals) || String(err));
-          }} else {{
-            showToast('Error: ' + err.message);
+          if (act.name === 'PUSH') {{
+            const sigId = act.args?.[0]?.kind?.value;
+            const elem = evalExpr(act.args?.[1], null, signals, itemCtx);
+            if (sigId) {{
+              const cur = Array.isArray(signals[sigId]) ? [...signals[sigId]] : [];
+              cur.push(elem);
+              wasmApp.set_signal(sigId, JSON.stringify(cur));
+              needsRender = true;
+            }}
+            continue;
+          }}
+          if (act.name === 'REMOVE') {{
+            const sigId = act.args?.[0]?.kind?.value;
+            const target = evalExpr(act.args?.[1], null, signals, itemCtx);
+            if (sigId && Array.isArray(signals[sigId])) {{
+              const cur = [...signals[sigId]];
+              if (typeof target === 'number') cur.splice(target, 1);
+              else {{ const idx = cur.indexOf(target); if (idx >= 0) cur.splice(idx, 1); }}
+              wasmApp.set_signal(sigId, JSON.stringify(cur));
+              needsRender = true;
+            }}
+            continue;
+          }}
+        }}
+        if (act.action_kind === 'set') {{
+          const nextVal = evalExpr(act.value, null, signals, itemCtx);
+          wasmApp.set_signal(act.signal, JSON.stringify(nextVal));
+          needsRender = true;
+          continue;
+        }}
+        if (act.action_kind === 'toast') {{
+          showToast(String(evalExpr(act.message, null, signals, itemCtx) ?? ''));
+          continue;
+        }}
+        if (act.action_kind === 'call') {{
+          const apiNode = bundle.program.nodes.find(n => n.id === act.api)?.kind;
+          if (!apiNode) continue;
+          const payload = evalExpr(act.payload, null, signals, itemCtx) || {{}};
+          const base = (bundle.apiBaseUrl || '').replace(/\/+$/, '');
+          try {{
+            const resp = await fetch(base + apiNode.path, {{
+              method: apiNode.method.toUpperCase(),
+              headers: {{ 'Content-Type': 'application/json', 'Accept': 'application/json' }},
+              body: apiNode.method.toUpperCase() === 'GET' ? undefined : JSON.stringify(payload)
+            }});
+            const data = await resp.json();
+            if (!resp.ok) throw new Error(data.error || ('HTTP ' + resp.status));
+            if (act.bind) {{
+              const nextVal = evalExpr(act.bind.value, data, currentSignals(), itemCtx);
+              wasmApp.set_signal(act.bind.signal, JSON.stringify(nextVal));
+              needsRender = true;
+            }}
+          }} catch (err) {{
+            const errHandler = (ui.events || []).find(e => e.event === 'err');
+            if (errHandler && errHandler.action.action_kind === 'toast') {{
+              showToast(evalExpr(errHandler.action.message, null, signals, itemCtx) || String(err));
+            }} else {{
+              showToast('Error: ' + err.message);
+            }}
           }}
         }}
       }}
+
+      if (needsRender) {{
+        savePersisted();
+        renderStage();
+      }}
+    }}
+
+    async function handleNodeClick(ui) {{ return runNodeEvent(ui, 'tap', null); }}
+
+    function renderDynamicNode(tplId, nodeMap, signals, itemCtx) {{
+      const ui = nodeMap[tplId];
+      if (!ui || ui.node_type !== 'ui') return null;
+      if (ui.widget === 'TXT') {{
+        const span = document.createElement('span');
+        span.style.fontSize = (ui.args[0]?.value ?? 14) + 'px';
+        span.style.fontWeight = String(ui.args[1]?.value ?? 400);
+        span.style.color = ui.args[2]?.value ?? '#0F172A';
+        if (ui.body?.body_kind === 'text') span.textContent = resolveText(ui.body.value.template, signals, itemCtx);
+        return span;
+      }}
+      if (ui.widget === 'BTN') {{
+        const btn = document.createElement('button');
+        btn.className = 'aion-btn';
+        btn.style.display = 'inline-flex';
+        btn.style.alignItems = 'center';
+        btn.style.width = (ui.args[0]?.value ?? 90) + 'px';
+        btn.style.height = (ui.args[1]?.value ?? 32) + 'px';
+        btn.style.borderRadius = (ui.args[2]?.value ?? 6) + 'px';
+        btn.style.background = ui.args[3]?.value ?? '#2563EB';
+        btn.onclick = () => runNodeEvent(ui, 'tap', itemCtx);
+        for (const ch of (ui.body?.body_kind === 'children' ? ui.body.value : [])) {{
+          const c = renderDynamicNode(ch, nodeMap, signals, itemCtx);
+          if (c) btn.appendChild(c);
+        }}
+        return btn;
+      }}
+      const div = document.createElement('div');
+      div.style.display = 'flex';
+      div.style.flexDirection = ui.args[0]?.value === 'h' ? 'row' : 'column';
+      const j = ui.args[1]?.value;
+      div.style.justifyContent = j === 'sb' ? 'space-between' : j === 'c' ? 'center' : 'flex-start';
+      div.style.alignItems = 'center';
+      div.style.gap = (ui.args[3]?.value ?? 8) + 'px';
+      div.style.padding = '8px 10px';
+      div.style.background = '#FFFFFF';
+      div.style.borderRadius = '8px';
+      div.style.border = '1px solid #E2E8F0';
+      for (const ch of (ui.body?.body_kind === 'children' ? ui.body.value : [])) {{
+        const c = renderDynamicNode(ch, nodeMap, signals, itemCtx);
+        if (c) div.appendChild(c);
+      }}
+      return div;
     }}
 
     function renderStage() {{
@@ -480,10 +682,35 @@ fn generate_wasm_index_html(app_name: &str) -> String {
           if (boundSig) {{
             el.value = signals[boundSig] ?? '';
             el.addEventListener('input', e => {{
-              wasmApp.set_signal(boundSig, JSON.stringify(e.target.value));
+              wasmApp.set_signal(boundSig, JSON.stringify(coerceVal(boundSig, e.target.value)));
+              savePersisted();
               refreshTexts();
             }});
           }}
+        }} else if (ui.widget === 'SEL' || ui.widget === 'SELECT') {{
+          el = document.createElement('select');
+          el.className = 'aion-node aion-sel';
+          const boundSig = ui.args[4]?.value;
+          el.style.borderRadius = (ui.args[2]?.value ?? 6) + 'px';
+          el.style.background = ui.args[3]?.value ?? '#FFFFFF';
+          const opts = extractSelectOptions(ui, signals);
+          const curVal = boundSig ? String(signals[boundSig] ?? '') : '';
+          for (const o of opts) {{
+            const optEl = document.createElement('option');
+            optEl.value = o.value;
+            optEl.textContent = resolveText(o.label, signals, null);
+            if (o.value === curVal) optEl.selected = true;
+            el.appendChild(optEl);
+          }}
+          el.addEventListener('change', async e => {{
+            if (boundSig) {{
+              wasmApp.set_signal(boundSig, JSON.stringify(coerceVal(boundSig, e.target.value)));
+              savePersisted();
+            }}
+            await runNodeEvent(ui, 'change', null);
+            await runNodeEvent(ui, 'tap', null);
+            renderStage();
+          }});
         }} else if (ui.widget === 'TXT') {{
           el = document.createElement('span');
           el.className = 'aion-node aion-txt';
@@ -492,14 +719,34 @@ fn generate_wasm_index_html(app_name: &str) -> String {
           el.style.color = ui.args[2]?.value ?? '#0F172A';
           if (ui.body?.body_kind === 'text') {{
             el.dataset.template = ui.body.value.template;
-            el.textContent = wasmApp.resolve_text(ui.body.value.template);
+            el.textContent = resolveText(ui.body.value.template, signals, null);
           }}
         }} else {{
           el = document.createElement('div');
           el.className = 'aion-node';
+          const isScrollFlex = ui.widget === 'FLEX' && (ui.args || []).some(a => a.value === 'scroll');
+          el.style.pointerEvents = (ui.widget === 'LIST' || isScrollFlex) ? 'auto' : 'none';
+          if (isScrollFlex) el.style.overflow = 'auto';
           if (ui.widget === 'ROOT' && ui.args[4]?.value) el.style.background = ui.args[4].value;
           if (ui.widget === 'NAV' && ui.args[2]?.value) el.style.background = ui.args[2].value;
-          if (ui.widget === 'LIST') el.style.overflow = 'auto';
+          if (ui.widget === 'LIST') {{
+            el.style.overflow = 'auto';
+            el.style.display = 'flex';
+            el.style.flexDirection = ui.args[0]?.value === 'h' ? 'row' : 'column';
+            el.style.alignItems = 'stretch';
+            el.style.gap = (ui.args[1]?.value ?? 8) + 'px';
+            const listSig = getDynamicListSig(ui);
+            if (listSig) {{
+              const items = Array.isArray(signals[listSig]) ? signals[listSig] : [];
+              const tplId = ui.body?.body_kind === 'children' ? ui.body.value[0] : null;
+              if (tplId) {{
+                items.forEach((item, index) => {{
+                  const rowEl = renderDynamicNode(tplId, nodeMap, signals, {{ item, index }});
+                  if (rowEl) el.appendChild(rowEl);
+                }});
+              }}
+            }}
+          }}
         }}
 
         el.style.left = box.x + 'px';
@@ -516,7 +763,11 @@ fn generate_wasm_index_html(app_name: &str) -> String {
       const raw = await resp.text();
       bundle = JSON.parse(raw);
       wasmApp = new AionWasmApp(raw);
+      initPersisted();
       renderStage();
+      for (const n of bundle.program.nodes) {{
+        if (n.kind?.node_type === 'ui') runNodeEvent(n.kind, 'init', null);
+      }}
       window.addEventListener('resize', renderStage);
     }})();
   </script>
@@ -562,6 +813,7 @@ fn generate_prod_index_html(app_name: &str) -> String {
     .aion-btn:hover {{ opacity: .9; }}
     .aion-inp {{ border: 1px solid #CBD5E1; padding: 0 12px; color: #0F172A; font-size: 14px; outline: none; }}
     .aion-inp:focus {{ border-color: #2563EB; box-shadow: 0 0 0 2px rgba(37,99,235,.2); }}
+    .aion-sel {{ border: 1px solid #CBD5E1; padding: 0 10px; color: #0F172A; font-size: 14px; outline: none; cursor: pointer; }}
     .aion-txt {{ white-space: nowrap; pointer-events: none; }}
     #toast {{ position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #0F172A; color: #F8FAFC; padding: 10px 18px; border-radius: 8px; display: none; font-size: 14px; z-index: 99; box-shadow: 0 10px 25px rgba(0,0,0,.25); }}
   </style>
@@ -572,15 +824,18 @@ fn generate_prod_index_html(app_name: &str) -> String {
   <script>
     let bundle = null;
     let signals = {{}};
+    let signalTypes = {{}};
     let persistedSet = new Set();
     let activeScreens = {{}};
+    const STORAGE_PREFIX = 'aion_state:' + (location.pathname || 'root') + ':';
 
     function initPersisted() {{
       for (const n of bundle.program.nodes) {{
-        if (n.kind?.node_type === 'signal' && n.kind.persist) {{
+        if (n.kind?.node_type === 'signal') {{
+          signalTypes[n.id] = n.kind.ty;
           persistedSet.add(n.id);
           try {{
-            const raw = localStorage.getItem('aion_persist:' + n.id);
+            const raw = localStorage.getItem(STORAGE_PREFIX + n.id);
             if (raw !== null) signals[n.id] = JSON.parse(raw);
           }} catch (_) {{}}
         }}
@@ -589,8 +844,32 @@ fn generate_prod_index_html(app_name: &str) -> String {
 
     function savePersisted() {{
       for (const id of persistedSet) {{
-        try {{ localStorage.setItem('aion_persist:' + id, JSON.stringify(signals[id])); }} catch (_) {{}}
+        try {{ localStorage.setItem(STORAGE_PREFIX + id, JSON.stringify(signals[id])); }} catch (_) {{}}
       }}
+    }}
+
+    function coerceVal(sigId, rawVal) {{
+      const ty = signalTypes[sigId];
+      if (ty === 'I32') {{ const n = parseInt(rawVal, 10); return Number.isNaN(n) ? 0 : n; }}
+      if (ty === 'F64') {{ const n = parseFloat(rawVal); return Number.isNaN(n) ? 0 : n; }}
+      if (ty === 'Bool') return Boolean(rawVal);
+      return rawVal;
+    }}
+
+    function extractSelectOptions(ui) {{
+      let raw = [];
+      if (ui.body?.body_kind === 'options') raw = ui.body.value || [];
+      else if (ui.body?.body_kind === 'text' && ui.body.value?.template) {{
+        raw = ui.body.value.template.split(',').map(s => s.trim()).filter(Boolean);
+      }} else if (ui.args?.[5]?.arg_kind === 'node_ref') {{
+        const arr = signals[ui.args[5].value];
+        if (Array.isArray(arr)) raw = arr.map(x => String(x));
+      }}
+      return raw.map(entry => {{
+        const s = String(entry);
+        const bar = s.indexOf('|');
+        return bar >= 0 ? {{ value: s.slice(0, bar), label: s.slice(bar + 1) }} : {{ value: s, label: s }};
+      }});
     }}
 
     function getDynamicListSig(ui) {{
@@ -701,10 +980,20 @@ fn generate_prod_index_html(app_name: &str) -> String {
       if (k === 'binary') {{
         const l = evalExpr(v.left, resObj, itemCtx);
         const r = evalExpr(v.right, resObj, itemCtx);
-        if (v.op === 'Add') return (Number(l) || 0) + (Number(r) || 0);
-        if (v.op === 'Sub') return (Number(l) || 0) - (Number(r) || 0);
-        if (v.op === 'Mul') return (Number(l) || 0) * (Number(r) || 0);
-        if (v.op === 'Div') return Number(r) ? (Number(l) / Number(r)) : 0;
+        switch (v.op) {{
+          case 'Add': return (typeof l === 'string' || typeof r === 'string') ? (String(l ?? '') + String(r ?? '')) : ((Number(l) || 0) + (Number(r) || 0));
+          case 'Sub': return (Number(l) || 0) - (Number(r) || 0);
+          case 'Mul': return (Number(l) || 0) * (Number(r) || 0);
+          case 'Div': return Number(r) ? (Number(l) / Number(r)) : 0;
+          case 'Eq': return l === r;
+          case 'Ne': return l !== r;
+          case 'Lt': return Number(l) < Number(r);
+          case 'Le': return Number(l) <= Number(r);
+          case 'Gt': return Number(l) > Number(r);
+          case 'Ge': return Number(l) >= Number(r);
+          case 'And': return Boolean(l) && Boolean(r);
+          case 'Or': return Boolean(l) || Boolean(r);
+        }}
       }}
       return null;
     }}
@@ -716,77 +1005,86 @@ fn generate_prod_index_html(app_name: &str) -> String {
     }}
 
     async function runNodeEvent(ui, evName, itemCtx) {{
-      const tap = (ui.events || []).find(e => e.event === evName);
-      if (!tap) return;
-      const act = tap.action;
-      if (act.action_kind === 'generic') {{
-        if (act.name === 'NAV') {{
-          const target = act.args?.[0]?.kind?.value;
-          if (target) navigateTo(target);
-          return;
-        }}
-        if (act.name === 'PUSH') {{
-          const sigId = act.args?.[0]?.kind?.value;
-          const elem = evalExpr(act.args?.[1], null, itemCtx);
-          if (sigId) {{
-            const cur = Array.isArray(signals[sigId]) ? [...signals[sigId]] : [];
-            cur.push(elem);
-            signals[sigId] = cur;
-            savePersisted();
-            renderStage();
+      const handlers = (ui.events || []).filter(e => e.event === evName);
+      if (!handlers.length) return;
+      let needsRender = false;
+
+      for (const handler of handlers) {{
+        const act = handler.action;
+        if (act.action_kind === 'generic') {{
+          if (act.name === 'NAV') {{
+            const target = act.args?.[0]?.kind?.value;
+            if (target) {{
+              savePersisted();
+              navigateTo(target);
+              needsRender = false;
+            }}
+            continue;
           }}
-          return;
-        }}
-        if (act.name === 'REMOVE') {{
-          const sigId = act.args?.[0]?.kind?.value;
-          const target = evalExpr(act.args?.[1], null, itemCtx);
-          if (sigId && Array.isArray(signals[sigId])) {{
-            const cur = [...signals[sigId]];
-            if (typeof target === 'number') cur.splice(target, 1);
-            else {{ const idx = cur.indexOf(target); if (idx >= 0) cur.splice(idx, 1); }}
-            signals[sigId] = cur;
-            savePersisted();
-            renderStage();
+          if (act.name === 'PUSH') {{
+            const sigId = act.args?.[0]?.kind?.value;
+            const elem = evalExpr(act.args?.[1], null, itemCtx);
+            if (sigId) {{
+              const cur = Array.isArray(signals[sigId]) ? [...signals[sigId]] : [];
+              cur.push(elem);
+              signals[sigId] = cur;
+              needsRender = true;
+            }}
+            continue;
           }}
-          return;
+          if (act.name === 'REMOVE') {{
+            const sigId = act.args?.[0]?.kind?.value;
+            const target = evalExpr(act.args?.[1], null, itemCtx);
+            if (sigId && Array.isArray(signals[sigId])) {{
+              const cur = [...signals[sigId]];
+              if (typeof target === 'number') cur.splice(target, 1);
+              else {{ const idx = cur.indexOf(target); if (idx >= 0) cur.splice(idx, 1); }}
+              signals[sigId] = cur;
+              needsRender = true;
+            }}
+            continue;
+          }}
+        }}
+        if (act.action_kind === 'set') {{
+          signals[act.signal] = evalExpr(act.value, null, itemCtx);
+          needsRender = true;
+          continue;
+        }}
+        if (act.action_kind === 'toast') {{
+          showToast(String(evalExpr(act.message, null, itemCtx) ?? ''));
+          continue;
+        }}
+        if (act.action_kind === 'call') {{
+          const apiNode = bundle.program.nodes.find(n => n.id === act.api)?.kind;
+          if (!apiNode) continue;
+          const payload = evalExpr(act.payload, null, itemCtx) || {{}};
+          const base = (bundle.apiBaseUrl || '').replace(/\/+$/, '');
+          try {{
+            const resp = await fetch(base + apiNode.path, {{
+              method: apiNode.method.toUpperCase(),
+              headers: {{ 'Content-Type': 'application/json', 'Accept': 'application/json' }},
+              body: apiNode.method.toUpperCase() === 'GET' ? undefined : JSON.stringify(payload)
+            }});
+            const data = await resp.json();
+            if (!resp.ok) throw new Error(data.error || ('HTTP ' + resp.status));
+            if (act.bind) {{
+              signals[act.bind.signal] = evalExpr(act.bind.value, data, itemCtx);
+              needsRender = true;
+            }}
+          }} catch (err) {{
+            const errHandler = (ui.events || []).find(e => e.event === 'err');
+            if (errHandler && errHandler.action.action_kind === 'toast') {{
+              showToast(evalExpr(errHandler.action.message, null, itemCtx) || String(err));
+            }} else {{
+              showToast('Error: ' + err.message);
+            }}
+          }}
         }}
       }}
-      if (act.action_kind === 'set') {{
-        signals[act.signal] = evalExpr(act.value, null, itemCtx);
+
+      if (needsRender) {{
         savePersisted();
         renderStage();
-        return;
-      }}
-      if (act.action_kind === 'toast') {{
-        showToast(evalExpr(act.message, null, itemCtx) || '');
-        return;
-      }}
-      if (act.action_kind === 'call') {{
-        const apiNode = bundle.program.nodes.find(n => n.id === act.api)?.kind;
-        if (!apiNode) return;
-        const payload = evalExpr(act.payload, null, itemCtx) || {{}};
-        const base = (bundle.apiBaseUrl || '').replace(/\/+$/, '');
-        try {{
-          const resp = await fetch(base + apiNode.path, {{
-            method: apiNode.method.toUpperCase(),
-            headers: {{ 'Content-Type': 'application/json', 'Accept': 'application/json' }},
-            body: apiNode.method.toUpperCase() === 'GET' ? undefined : JSON.stringify(payload)
-          }});
-          const data = await resp.json();
-          if (!resp.ok) throw new Error(data.error || ('HTTP ' + resp.status));
-          if (act.bind) {{
-            signals[act.bind.signal] = evalExpr(act.bind.value, data, itemCtx);
-            savePersisted();
-            renderStage();
-          }}
-        }} catch (err) {{
-          const errHandler = (ui.events || []).find(e => e.event === 'err');
-          if (errHandler && errHandler.action.action_kind === 'toast') {{
-            showToast(evalExpr(errHandler.action.message, null, itemCtx) || String(err));
-          }} else {{
-            showToast('Error: ' + err.message);
-          }}
-        }}
       }}
     }}
 
@@ -878,11 +1176,35 @@ fn generate_prod_index_html(app_name: &str) -> String {
           if (boundSig) {{
             el.value = signals[boundSig] ?? '';
             el.addEventListener('input', e => {{
-              signals[boundSig] = e.target.value;
+              signals[boundSig] = coerceVal(boundSig, e.target.value);
               savePersisted();
               updateSignalsUI();
             }});
           }}
+        }} else if (ui.widget === 'SEL' || ui.widget === 'SELECT') {{
+          el = document.createElement('select');
+          el.className = 'aion-node aion-sel';
+          const boundSig = ui.args[4]?.value;
+          el.style.borderRadius = (ui.args[2]?.value ?? 6) + 'px';
+          el.style.background = ui.args[3]?.value ?? '#FFFFFF';
+          const opts = extractSelectOptions(ui);
+          const curVal = boundSig ? String(signals[boundSig] ?? '') : '';
+          for (const o of opts) {{
+            const optEl = document.createElement('option');
+            optEl.value = o.value;
+            optEl.textContent = resolveText(o.label, null);
+            if (o.value === curVal) optEl.selected = true;
+            el.appendChild(optEl);
+          }}
+          el.addEventListener('change', async e => {{
+            if (boundSig) {{
+              signals[boundSig] = coerceVal(boundSig, e.target.value);
+              savePersisted();
+            }}
+            await runNodeEvent(ui, 'change', null);
+            await runNodeEvent(ui, 'tap', null);
+            renderStage();
+          }});
         }} else if (ui.widget === 'TXT') {{
           el = document.createElement('span');
           el.className = 'aion-node aion-txt';
@@ -896,6 +1218,9 @@ fn generate_prod_index_html(app_name: &str) -> String {
         }} else {{
           el = document.createElement('div');
           el.className = 'aion-node';
+          const isScrollFlex = ui.widget === 'FLEX' && (ui.args || []).some(a => a.value === 'scroll');
+          el.style.pointerEvents = (ui.widget === 'LIST' || isScrollFlex) ? 'auto' : 'none';
+          if (isScrollFlex) el.style.overflow = 'auto';
           if (ui.widget === 'ROOT' && ui.args[4]?.value) el.style.background = ui.args[4].value;
           if (ui.widget === 'NAV' && ui.args[2]?.value) el.style.background = ui.args[2].value;
           if (ui.widget === 'LIST') {{

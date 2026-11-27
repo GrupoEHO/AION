@@ -107,7 +107,8 @@ Supports `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, Gin-style `:id` or `{id}` rout
 - `ROUTER[#N_initial_screen]{#N_screen1,#N_screen2,...}` — Multi-screen container (shows ONLY the active screen; switches live via `@tap->NAV(#N_screen2)` without restarting or creating extra servers).
 - `LIST[dir(v|h), gap, #S_list?, noscroll?]{#N_row}` — Scrollable list container. When bound to a `list<#M>` signal `#S_list`, dynamically repeats `#N_row` for every element exposing `{item.field}` and `index`.
 - `TXT[font_size, weight, color_hex]{"Text with {#S0} or {item.field}"}` — Text label.
-- `INP[width, height, radius, bg_hex, #S_bound]{"Placeholder..."}` — Text input bound to signal `#S_bound`.
+- `INP[width, height, radius, bg_hex, #S_bound]{"Placeholder..."}` — Text input bound to signal `#S_bound` (value coerced to the signal type `i32`/`f64`/`str`).
+- `SEL[width, height, radius, bg_hex, #S_bound]{"MXN|Peso MXN", "USD|Dolar USD"}` — Native dropdown (Web `<select>`, Android `Spinner`, iOS `Menu`). Each option is `"value"` or `"value|label"`; selecting writes `value` into `#S_bound` and fires `@change` (and `@tap`) handlers. **Use `SEL` instead of faking dropdowns with BTN + ROUTER.**
 - `BTN[width, height, radius, bg_hex]{#N_label} @tap->... @err->...` — Interactive button.
 
 ### Multi-Screen Navigation Rule (IMPORTANT)
@@ -128,6 +129,12 @@ Supports `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, Gin-style `:id` or `{id}` rout
 ```
 
 ### UI Event Handlers & Signal Persistence
+- **Every `#S` signal is automatically persisted** on-device (Web `localStorage`, Android `SharedPreferences`, iOS `UserDefaults`) — `@persist` is accepted but no longer required. `aion web` Hot Restart clears it.
+- **Multiple handlers per event are all executed in order**, so a node may chain several actions:
+  `@tap->#S_tasa=0.055 @tap->#S_total=#S_monto*#S_tasa @tap->TOAST("Listo")`
+- Local expressions run on the client without a backend: `+ - * /`, comparisons, string concatenation (`"Total " + #S_total`).
+- Apps can be 100% local (no `#SRV`/`#API`): use `SEL`, `INP`, `#S_x=expr`, `PUSH`, `REMOVE`, `TOAST`, `NAV`.
+- Note: non-interactive containers (FLEX/ROOT/NAV) never intercept taps, so a BTN with FLEX/TXT children is always clickable.
 - Local persistence across Web (`localStorage`), Android (`SharedPreferences`), and iOS (`UserDefaults`):
   `#S_gastos:list<#M_Gasto> = [] @persist`
 - Lifecycle initial load (on `ROOT` or `ROUTER` screens):

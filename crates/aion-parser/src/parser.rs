@@ -592,13 +592,22 @@ pub fn program_parser<'a>(src: &'a str) -> impl Parser<Token, Program, Error = S
     ));
 
     let ui_body = choice((
-        string_parser().map(|template| {
-            let interpolations = extract_interpolations(&template);
-            UiBody::Text {
-                template,
-                interpolations,
-            }
-        }),
+        string_parser()
+            .separated_by(just(Token::Comma))
+            .at_least(1)
+            .allow_trailing()
+            .map(|mut strs| {
+                if strs.len() == 1 {
+                    let template = strs.pop().unwrap();
+                    let interpolations = extract_interpolations(&template);
+                    UiBody::Text {
+                        template,
+                        interpolations,
+                    }
+                } else {
+                    UiBody::Options(strs)
+                }
+            }),
         node_tag_parser()
             .map(NodeId::new)
             .separated_by(just(Token::Comma))

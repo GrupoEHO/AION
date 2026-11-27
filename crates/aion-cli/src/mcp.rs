@@ -479,6 +479,7 @@ fn call_tool(
                     "LIST": "LIST[v|h, gap, #S_list_opt, noscroll?]{#N_row_tpl} (repeats #N_row_tpl with {item.field} & index)",
                     "TXT": "TXT[font_size, weight, #COLOR_HEX]{\"Text {#S0} or {item.field}\"}",
                     "INP": "INP[width, height, radius, #BG_HEX, #S_bound]{\"Placeholder\"}",
+                    "SEL": "SEL[width, height, radius, #BG_HEX, #S_bound]{\"MXN|Peso\", \"USD|Dolar\"} @change->#S_total=#S_monto*#S_tasa (native dropdown; options are \"value\" or \"value|label\")",
                     "BTN": "BTN[width, height, radius, #BG_HEX]{#N_lbl} @tap->PUSH(#S_items,{...}) | REMOVE(#S_items,index) | CALL(#API0,{...})=>#S0=res.f @err->TOAST(\"Error\")"
                 },
                 "rules": [
