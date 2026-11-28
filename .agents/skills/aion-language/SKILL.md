@@ -100,7 +100,12 @@ Supports `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, Gin-style `:id` or `{id}` rout
 #S1:str=""
 ```
 
-### UI Nodes (`#N`) — Positional Arguments (Zero Nesting)
+### UI Nodes (`#N`) — 14 Frozen Base Primitives + External Libraries
+Any widget outside these 14 direct primitives **must** come from an external library:
+- **Pure-AION UI library:** `#USE "libs/my_components.aion"` (flat-graph include, resolved recursively by `aion`).
+- **Native `#EXT` UI widget:** `#EXT:maps = "aion/maps@1.0"` then `#N_map:maps.MapView[320,240,19.43,-99.13]{}` (verified against the `#EXT` manifest `widgets` section).
+
+The 14 frozen base primitives (zero nesting):
 - `ROOT[pad_x, pad_y, width, height, bg_hex]{#N1}` — Root container (`100%, 100%`).
 - `FLEX[dir(v|h), justify(c|s|e|sb|sa), align(c|s|e|st), gap, scroll?]{#N2,#N3}` — Flexbox container.
 - `NAV[width, height, bg_hex]{#N_tab1,#N_tab2}` — Horizontal navigation bar.

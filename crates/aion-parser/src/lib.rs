@@ -21,6 +21,58 @@ pub fn parse_program(source: &str) -> Result<Program, Vec<Diagnostic>> {
         .map_err(|errs| errs.into_iter().map(|e| parse_err_to_diag(source, e)).collect())
 }
 
+/// Parses an `.aion` file on disk and recursively resolves `#USE "relative/path.aion"` includes
+/// into a single flat-graph [`Program`], rejecting missing files and cyclic includes.
+pub fn parse_file_with_includes(entry_path: &std::path::Path) -> Result<Program, Vec<Diagnostic>> {
+    let mut visited = std::collections::HashSet::new();
+    let mut stack = std::collections::HashSet::new();
+    let mut merged = Vec::new();
+    load_recursive(entry_path, &mut visited, &mut stack, &mut merged)?;
+    Ok(Program::new(merged))
+}
+
+fn load_recursive(
+    path: &std::path::Path,
+    visited: &mut std::collections::HashSet<std::path::PathBuf>,
+    stack: &mut std::collections::HashSet<std::path::PathBuf>,
+    out: &mut Vec<aion_ast::FlatNode>,
+) -> Result<(), Vec<Diagnostic>> {
+    let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    if !stack.insert(canonical.clone()) {
+        return Err(vec![Diagnostic::error(
+            "E_CIRCULAR_INCLUDE",
+            Phase::Parser,
+            format!("circular `#USE` include detected for `{}`", path.display()),
+            Span::default(),
+        )]);
+    }
+    if visited.contains(&canonical) {
+        stack.remove(&canonical);
+        return Ok(());
+    }
+    let src = std::fs::read_to_string(path).map_err(|e| {
+        vec![Diagnostic::error(
+            "E_INCLUDE_NOT_FOUND",
+            Phase::Parser,
+            format!("failed to read included file `{}`: {e}", path.display()),
+            Span::default(),
+        )]
+    })?;
+    let prog = parse_program(&src)?;
+    let base_dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    for node in prog.nodes {
+        if let aion_ast::NodeKind::Use(u) = &node.kind {
+            let child_path = base_dir.join(&u.path);
+            load_recursive(&child_path, visited, stack, out)?;
+        } else {
+            out.push(node);
+        }
+    }
+    stack.remove(&canonical);
+    visited.insert(canonical);
+    Ok(())
+}
+
 /// Parses an AION source string and formats any syntax/lexical errors as a JSON [`DiagnosticReport`].
 pub fn parse_to_json_report(source: &str) -> Result<Program, String> {
     parse_program(source).map_err(|diags| {

@@ -10,6 +10,7 @@ use crate::types::AionType;
 pub enum NodePrefix {
     Cfg,
     Ext,
+    Use,
     Srv,
     Mw,
     Api,
@@ -23,6 +24,7 @@ impl fmt::Display for NodePrefix {
         match self {
             NodePrefix::Cfg => write!(f, "CFG"),
             NodePrefix::Ext => write!(f, "EXT"),
+            NodePrefix::Use => write!(f, "USE"),
             NodePrefix::Srv => write!(f, "SRV"),
             NodePrefix::Mw => write!(f, "MW"),
             NodePrefix::Api => write!(f, "API"),
@@ -61,6 +63,8 @@ impl NodeId {
             Some(NodePrefix::Cfg)
         } else if body == "EXT" || body.starts_with("EXT:") {
             Some(NodePrefix::Ext)
+        } else if body == "USE" || body.starts_with("USE:") {
+            Some(NodePrefix::Use)
         } else if body.starts_with("SRV") {
             Some(NodePrefix::Srv)
         } else if body.starts_with("MW") {
@@ -127,12 +131,18 @@ pub struct FlatNode {
 pub enum NodeKind {
     Cfg(CfgNode),
     Ext(ExtNode),
+    Use(UseNode),
     Srv(SrvNode),
     Mw(MwNode),
     Model(ModelNode),
     Api(ApiNode),
     Signal(SignalNode),
     Ui(UiNode),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UseNode {
+    pub path: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

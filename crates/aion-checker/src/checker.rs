@@ -120,6 +120,7 @@ impl<'a> Checker<'a> {
                     self.ext_nodes
                         .insert(ext.alias.clone(), (ext, manifest, node.span));
                 }
+                NodeKind::Use(_) => {}
                 NodeKind::Srv(srv) => {
                     self.srvs.insert(node.id.clone(), (srv, node.span));
                 }
@@ -774,6 +775,86 @@ impl<'a> Checker<'a> {
                         );
                     }
                     UiBody::Empty | UiBody::Options(_) => {}
+                }
+
+                // Validate widget is either one of the 14 frozen base primitives or a declared #EXT widget (`alias.Widget`).
+                if let Some((alias, widget_name)) = ui.widget.split_once('.') {
+                    match self.ext_nodes.get(alias).copied() {
+                        Some((_, Some(manifest), _)) => {
+                            if let Some(wspec) = manifest.widgets.get(widget_name) {
+                                let min_args = wspec.args.iter().filter(|a| !a.opt).count();
+                                let max_args = wspec.args.len();
+                                if ui.args.len() < min_args || ui.args.len() > max_args {
+                                    self.diagnostics.push(
+                                        Diagnostic::error(
+                                            "E_EXT_ARG_COUNT",
+                                            Phase::Ext,
+                                            format!(
+                                                "external widget `{alias}.{widget_name}` in `{}` expects {min_args}..={max_args} args, found {}",
+                                                node.id, ui.args.len()
+                                            ),
+                                            node.span,
+                                        )
+                                        .with_node_id(node.id.as_str()),
+                                    );
+                                }
+                            } else {
+                                let known: Vec<&str> = manifest.widgets.keys().map(String::as_str).collect();
+                                self.diagnostics.push(
+                                    Diagnostic::error(
+                                        "E_EXT_WIDGET_NOT_FOUND",
+                                        Phase::Ext,
+                                        format!(
+                                            "widget `{widget_name}` does not exist on external module `{}@{}` (alias `{alias}`)",
+                                            manifest.id, manifest.ver
+                                        ),
+                                        node.span,
+                                    )
+                                    .with_node_id(node.id.as_str())
+                                    .with_expected(known.join(", "))
+                                    .with_found(ui.widget.clone())
+                                    .with_fix_hint(format!(
+                                        "Use a widget declared in `{}` manifest ({}) or compose from the 14 base primitives.",
+                                        manifest.id, known.join(", ")
+                                    )),
+                                );
+                            }
+                        }
+                        Some((_, None, _)) => {}
+                        None => {
+                            self.diagnostics.push(
+                                Diagnostic::error(
+                                    "E_UNKNOWN_EXT",
+                                    Phase::Ext,
+                                    format!("UI node `{}` references undeclared `#EXT` alias `{alias}`", node.id),
+                                    node.span,
+                                )
+                                .with_node_id(node.id.as_str())
+                                .with_fix_hint(format!("Declare `#EXT:{alias} = \"org/pkg@1.0\"` at the top of the file.")),
+                            );
+                        }
+                    }
+                } else if !matches!(
+                    ui.widget.as_str(),
+                    "ROOT" | "FLEX" | "LIST" | "ROUTER" | "MODAL" | "NAV"
+                        | "BTN" | "INP" | "SEL" | "SELECT" | "SW" | "SWITCH"
+                        | "TXT" | "IMG" | "PROG" | "RING"
+                ) {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            "E_UNKNOWN_WIDGET",
+                            Phase::Checker,
+                            format!(
+                                "unknown widget `{}` in `{}` (not one of the 14 base primitives)",
+                                ui.widget, node.id
+                            ),
+                            node.span,
+                        )
+                        .with_node_id(node.id.as_str())
+                        .with_expected("ROOT, FLEX, LIST, ROUTER, MODAL, NAV, BTN, INP, SEL, SW, TXT, IMG, PROG, RING, or alias.ExtWidget")
+                        .with_found(ui.widget.clone())
+                        .with_fix_hint("Use one of the 14 base primitives, import a pure-AION library with `#USE`, or declare a native `#EXT` widget."),
+                    );
                 }
 
                 let bound_idx = match ui.widget.as_str() {

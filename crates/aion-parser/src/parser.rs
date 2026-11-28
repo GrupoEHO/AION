@@ -4,7 +4,7 @@ use aion_ast::{
     AionType, ApiNode, ApiOutput, BinaryOp, CfgNode, CfgVar, ErrAction, EventAction, EventHandler,
     Expr, ExprKind, ExtNode, FieldDef, FlatNode, FlowControl, HttpMethod, ModelNode, MwNode,
     NodeId, NodeKind, Program, PropValue, SignalAssign, SignalNode, Span, SrvNode, SrvProp, Stmt,
-    UiArg, UiBody, UiNode,
+    UiArg, UiBody, UiNode, UseNode,
 };
 use chumsky::prelude::*;
 
@@ -568,7 +568,17 @@ pub fn program_parser<'a>(src: &'a str) -> impl Parser<Token, Program, Error = S
                 kind: NodeKind::Signal(SignalNode { ty, init, persist }),
             });
 
+    let neg_ui_num = just(Token::Minus).ignore_then(choice((
+        select! { Token::Float(s) => s }.try_map(|s, span| {
+            s.parse::<f64>()
+                .map(|v| UiArg::Float(-v))
+                .map_err(|e| Simple::custom(span, format!("invalid float `{s}`: {e}")))
+        }),
+        select! { Token::Int(n) => UiArg::Int(-n) },
+    )));
+
     let ui_arg = choice((
+        neg_ui_num,
         select! { Token::Float(s) => s }
             .then_ignore(just(Token::Percent))
             .try_map(|s, span| {
@@ -685,9 +695,24 @@ pub fn program_parser<'a>(src: &'a str) -> impl Parser<Token, Program, Error = S
             span: to_span(src, range),
         });
 
+    let use_node = select! { Token::NodeTag(t) if t == "#USE" => () }
+        .ignore_then(string_parser())
+        .map_with_span(move |path, range| FlatNode {
+            id: NodeId::new(format!("#USE:{path}")),
+            span: to_span(src, range),
+            kind: NodeKind::Use(UseNode { path }),
+        });
+
+    let widget_name = ident_parser()
+        .then(just(Token::Dot).ignore_then(ident_parser()).or_not())
+        .map(|(a, b)| match b {
+            Some(w) => format!("{a}.{w}"),
+            None => a,
+        });
+
     let ui_node = select! { Token::NodeTag(t) if t.starts_with("#N") => t }
         .then_ignore(just(Token::Colon))
-        .then(ident_parser())
+        .then(widget_name)
         .then(
             ui_arg
                 .separated_by(just(Token::Comma))
@@ -712,6 +737,7 @@ pub fn program_parser<'a>(src: &'a str) -> impl Parser<Token, Program, Error = S
     let top_node = choice((
         cfg_node,
         ext_node,
+        use_node,
         srv_node,
         mw_node,
         api_node,

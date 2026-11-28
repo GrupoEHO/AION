@@ -16,6 +16,7 @@ pub enum ExtCapability {
     FsWrite,
     Crypto,
     Clock,
+    Ui,
 }
 
 /// Positional function argument descriptor in an ABI manifest.
@@ -61,6 +62,17 @@ impl ExtFnSig {
     }
 }
 
+/// External native UI widget descriptor declared in an `#EXT` ABI manifest.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExtWidgetSpec {
+    pub args: Vec<ExtArg>,
+    #[serde(default)]
+    pub events: Vec<String>,
+    #[serde(default)]
+    pub desc: Option<String>,
+}
+
 /// AION External Module ABI v1 Manifest (`https://aion.dev/schemas/ext-abi-v1.json`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -73,7 +85,10 @@ pub struct ExtManifest {
     pub types: BTreeMap<String, BTreeMap<String, String>>,
     #[serde(default)]
     pub errs: Vec<String>,
+    #[serde(default)]
     pub fns: BTreeMap<String, ExtFnSig>,
+    #[serde(default)]
+    pub widgets: BTreeMap<String, ExtWidgetSpec>,
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]

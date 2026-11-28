@@ -490,6 +490,7 @@ fn call_tool(
                 "events": ["@tap", "@change", "@init", "@tick (1000ms) / @tick<ms> (e.g. @tick500)", "@loading", "@err", "optional guard: @event if <expr> -> <action>", "std_fns: UID(), NOW(), FMT_TIME(secs), FMT_MONEY(amt, sym?), SUM(#S_list, field?), COUNT(#S_list), ROUND(n, dec?)"],
                 "rules": [
                     "Flat graph only (zero nesting). Semantic IDs (#N_home, #S_budget, #M_Expense, #API_save) are recommended.",
+                    "UI base set is frozen at 14 primitives (ROOT, FLEX, LIST, ROUTER, MODAL, NAV, BTN, INP, SEL, SW, TXT, IMG, PROG, RING). Any other widget must use `#USE \"lib.aion\"` or a native `#EXT` widget (`alias.Widget[...]`).",
                     "Never spin up multiple #SRV servers for multiple screens; use one #SRV0 + ROUTER + @tap->NAV(#N_screen).",
                     "Every #N node with CALL(#API...) MUST declare an @err handler.",
                     "UI must fit mobile (390x844) and desktop (1440x900) without E_UI_OVERFLOW.",

@@ -27,7 +27,11 @@ Conjunto mínimo y componible medido por Taffy y compilado 1:1 a Web/WASM, Andro
 | **Entrada / Formularios (4)** | `BTN`, `INP`, `SEL`, `SW` | Botones, texto/números, dropdown nativo, switch booleano |
 | **Presentación (4)** | `TXT`, `IMG`, `PROG`, `RING` | Texto reactivo, imágenes, barra lineal y anillo circular de progreso |
 
-Widgets compuestos (tarjetas, calendarios, selectores complejos, temas) deben construirse componiendo estas 14 primitivas (y en siguientes iteraciones mediante componentes reutilizables `#COMP`), no añadiendo sintaxis especial al compilador.
+Widgets compuestos (tarjetas, calendarios, selectores complejos, temas) deben construirse componiendo estas 14 primitivas en librerías externas importables mediante `#USE "ruta/lib.aion"`, sin añadir sintaxis especial al compilador.
+
+> **Regla de congelamiento visual:** Las 14 primitivas de `aion-ui` son el conjunto base cerrado del lenguaje. **Todo widget que no esté entre estas 14 primitivas directas DEBE implementarse como librería externa**, ya sea:
+> 1. **Librería externa de UI compuesta (100% AION)** importada con `#USE "ruta/componente.aion"`, o
+> 2. **Librería externa nativa (`#EXT`)** declarando widgets en su manifiesto ABI (`widgets`) e invocada como `#N_id:alias.WidgetName[w, h, ...]{}` (verificada estáticamente por `aion_check` y medida por Taffy).
 
 ---
 

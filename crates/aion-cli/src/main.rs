@@ -12,8 +12,8 @@ use aion_cli::ios::{build_ios_app, IosBuildOptions};
 use aion_cli::mcp::serve_mcp_stdio;
 use aion_cli::web::serve_web;
 use aion_cli::web_build::{build_web_bundle, ProjectMeta, WebBuildOptions};
-use aion_cli::{build_registry, cmd_check, cmd_create, cmd_parse, cmd_patch};
-use aion_parser::parse_program;
+use aion_cli::{build_registry, cmd_create, cmd_patch};
+use aion_parser::{parse_file_with_includes, parse_program};
 use aion_runtime_net::{serve, RuntimeConfig};
 
 fn find_manifests_dir(args: &[String]) -> PathBuf {
@@ -78,11 +78,11 @@ fn main() {
                 eprintln!("Usage: aion parse <file.aion>");
                 process::exit(2);
             }
-            let src = read_file_or_exit(Path::new(&args[2]));
-            match cmd_parse(&src) {
-                Ok(json) => println!("{json}"),
-                Err(json_err) => {
-                    println!("{json_err}");
+            match parse_file_with_includes(Path::new(&args[2])) {
+                Ok(prog) => println!("{}", serde_json::to_string_pretty(&prog).unwrap()),
+                Err(diags) => {
+                    let report = DiagnosticReport::from_diagnostics(diags);
+                    println!("{}", report.to_json_pretty().unwrap());
                     process::exit(1);
                 }
             }
@@ -92,14 +92,21 @@ fn main() {
                 eprintln!("Usage: aion check <file.aion> [--manifests-dir <dir>]");
                 process::exit(2);
             }
-            let src = read_file_or_exit(Path::new(&args[2]));
             let reg = build_registry(Some(&manifests_dir)).unwrap_or_else(|e| {
                 eprintln!("{{\"ok\":false,\"error\":\"{e}\"}}");
                 process::exit(1);
             });
-            let (ok, json) = cmd_check(&src, &reg);
-            println!("{json}");
-            if !ok {
+            let prog = match parse_file_with_includes(Path::new(&args[2])) {
+                Ok(p) => p,
+                Err(diags) => {
+                    let report = DiagnosticReport::from_diagnostics(diags);
+                    println!("{}", report.to_json_pretty().unwrap());
+                    process::exit(1);
+                }
+            };
+            let report = check_program(&prog, &reg);
+            println!("{}", report.to_json_pretty().unwrap());
+            if !report.ok {
                 process::exit(1);
             }
         }
@@ -185,12 +192,11 @@ fn main() {
                     PathBuf::from(meta.entry.clone().unwrap_or_else(|| "app.aion".to_string()))
                 });
 
-            let src = read_file_or_exit(&file_path);
             let reg = build_registry(Some(&manifests_dir)).unwrap_or_else(|e| {
                 eprintln!("{{\"ok\":false,\"error\":\"{e}\"}}");
                 process::exit(1);
             });
-            let prog = match parse_program(&src) {
+            let prog = match parse_file_with_includes(&file_path) {
                 Ok(p) => p,
                 Err(diags) => {
                     let report = DiagnosticReport::from_diagnostics(diags);

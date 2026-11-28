@@ -237,6 +237,44 @@ mod tests {
     }
 
     #[test]
+    fn enforces_14_base_primitives_and_validates_ext_ui_widgets_and_use_includes() {
+        let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests");
+        let mut reg = mock_registry();
+        reg.register_manifest_file(&base.join("aion-maps-1.0.0.json"))
+            .unwrap();
+
+        let valid_ext_widget = r#"
+#EXT:maps = "aion/maps@1.0"
+#N_root:ROOT[16,16,100%,100%,#F8FAFC]{#N_map}
+#N_map:maps.MapView[320,240,19.43,-99.13,12]{}
+"#;
+        let prog = parse_program(valid_ext_widget).expect("parse ext widget");
+        let rep = check_program(&prog, &reg);
+        assert!(rep.ok, "{}", rep.to_json_pretty().unwrap());
+
+        // Unknown widget outside the 14 base primitives must emit E_UNKNOWN_WIDGET.
+        let bad_prim = r#"
+#N_root:ROOT[0,0,100%,100%,#F8FAFC]{#N_cal}
+#N_cal:CALENDAR[300,200]{}
+"#;
+        let bad_prog = parse_program(bad_prim).expect("parse");
+        let bad_rep = check_program(&bad_prog, &reg);
+        assert!(!bad_rep.ok);
+        assert_eq!(bad_rep.diagnostics[0].code, "E_UNKNOWN_WIDGET");
+
+        // Nonexistent widget on a valid #EXT must emit E_EXT_WIDGET_NOT_FOUND.
+        let bad_ext = r#"
+#EXT:maps = "aion/maps@1.0"
+#N_root:ROOT[0,0,100%,100%,#F8FAFC]{#N_m}
+#N_m:maps.Globe3D[300,200]{}
+"#;
+        let bad_ext_prog = parse_program(bad_ext).expect("parse");
+        let bad_ext_rep = check_program(&bad_ext_prog, &reg);
+        assert!(!bad_ext_rep.ok);
+        assert_eq!(bad_ext_rep.diagnostics[0].code, "E_EXT_WIDGET_NOT_FOUND");
+    }
+
+    #[test]
     fn validates_sw_img_and_std_functions_fmt_time_fmt_money_sum_count_round() {
         let src = r#"
 #M_Gasto:Gasto{id:str, concepto:str, monto:f64}

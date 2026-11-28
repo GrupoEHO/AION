@@ -1,0 +1,27 @@
+{
+  "abi": 1,
+  "id": "aion/maps",
+  "ver": "1.0.0",
+  "caps": ["net", "ui"],
+  "types": {
+    "Coord": {
+      "lat": "f64",
+      "lng": "f64"
+    }
+  },
+  "errs": ["E_NO_PERMISSION", "E_UNAVAILABLE"],
+  "fns": {},
+  "widgets": {
+    "MapView": {
+      "desc": "Interactive native map (MapKit on iOS, Google Maps on Android, Leaflet/Mapbox on Web).",
+      "args": [
+        { "n": "width", "t": "i32" },
+        { "n": "height", "t": "i32" },
+        { "n": "lat", "t": "f64" },
+        { "n": "lng", "t": "f64" },
+        { "n": "zoom", "t": "i32", "opt": true }
+      ],
+      "events": ["tap", "change"]
+    }
+  }
+}

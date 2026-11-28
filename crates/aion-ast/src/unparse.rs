@@ -40,6 +40,9 @@ pub fn format_flat_node(node: &FlatNode, out: &mut String) {
         NodeKind::Ext(ext) => {
             let _ = write!(out, "#EXT:{} = \"{}\"", ext.alias, ext.raw_spec);
         }
+        NodeKind::Use(u) => {
+            let _ = write!(out, "#USE {}", escape_str(&u.path));
+        }
         NodeKind::Srv(srv) => {
             let props: Vec<String> = srv
                 .props
