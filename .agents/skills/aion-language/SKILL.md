@@ -102,12 +102,12 @@ Supports `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, Gin-style `:id` or `{id}` rout
 #S1:str=""
 ```
 
-### UI Nodes (`#N`) — 15 Frozen Base Primitives + External Libraries
-Any widget outside these 15 direct primitives **must** come from an external library:
+### UI Nodes (`#N`) — 16 Frozen Base Primitives + External Libraries
+Any widget outside these 16 direct primitives **must** come from an external library:
 - **Pure-AION UI library:** `#USE "libs/my_components.aion"` (flat-graph include, resolved recursively by `aion`).
 - **Native `#EXT` UI widget:** `#EXT:maps = "aion/maps@1.0"` then `#N_map:maps.MapView[320,240,19.43,-99.13]{}` (verified against the `#EXT` manifest `widgets` section).
 
-The 15 frozen base primitives (zero nesting):
+The 16 frozen base primitives (zero nesting):
 - `ROOT[pad_x, pad_y, width, height, bg_hex]{#N1}` — Root container (`100%, 100%`).
 - `FLEX[dir(v|h), justify(c|s|e|sb|sa), align(c|s|e|st), gap, scroll?]{#N2,#N3}` — Flexbox container.
 - `NAV[width, height, bg_hex]{#N_tab1,#N_tab2}` — Horizontal navigation bar.
@@ -119,6 +119,7 @@ The 15 frozen base primitives (zero nesting):
 - `SW[width, height, off_hex, on_hex, #S_bool] @change->...` — Native boolean toggle switch (Web toggle, Android `Switch`, iOS `Toggle`).
 - `IMG[width, height, radius, cover|contain]{"https://..." | "{#S_url}"}` — Image widget with rounded corners and fit mode.
 - `ICON[size, color_hex]{"home" | "pack:name" | "{#S_icon}"}` — Vector icon widget (24×24 stroke SVG rendered natively on Web/WASM, Android `Path`, and SwiftUI `Shape`). Includes ~65 built-in `aion/std` icons (`home`, `menu`, `back`, `add`, `edit`, `trash`, `search`, `settings`, `play`, `pause`, `stop`, `clock`, `timer`, `user`, `bell`, `star`, `heart`, `wallet`, `chart`, etc.) plus custom/third-party icon packs via `#EXT` manifests (`"icons": { ... }`) referenced as `"alias:name"`.
+- `CANVAS[width, height, bg_hex, #S_cmds] @tap->... @drag->...` — Hardware-accelerated vector & pixel-by-pixel drawing canvas (Web `<canvas>` HiDPI, Android `Canvas`, iOS SwiftUI `Canvas`/Metal). Bound to `#S_cmds:list<map<str,any>>` supporting `rect`, `circle`, `arc`, `line`, `path`, `text`, `pixel`, `pixels`. `@tap` and `@drag` expose local coordinates `item.x` and `item.y`.
 - `PROG[width, height, radius, track_hex, fill_hex, #S_pct]` — Linear progress bar (`0..100`).
 - `RING[size, thickness, track_hex, fill_hex, #S_pct]` — Circular progress ring (`0..100`, animated on Web/Android/iOS).
 - `MODAL[#S_open]{#N_dialog}` — Full-screen modal overlay shown while `#S_open` is truthy (`true`/`1`).

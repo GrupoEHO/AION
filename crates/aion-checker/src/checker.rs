@@ -716,6 +716,11 @@ impl<'a> Checker<'a> {
                 if let Some(elem_ty) = item_scopes.get(&node.id) {
                     ui_locals.insert("item".to_string(), elem_ty.clone());
                     ui_locals.insert("index".to_string(), AionType::I32);
+                } else if ui.widget == "CANVAS" {
+                    ui_locals.insert(
+                        "item".to_string(),
+                        AionType::Map(Box::new(AionType::Str), Box::new(AionType::F64)),
+                    );
                 }
 
                 match &ui.body {
@@ -838,22 +843,22 @@ impl<'a> Checker<'a> {
                     ui.widget.as_str(),
                     "ROOT" | "FLEX" | "LIST" | "ROUTER" | "MODAL" | "NAV"
                         | "BTN" | "INP" | "SEL" | "SELECT" | "SW" | "SWITCH"
-                        | "TXT" | "IMG" | "ICON" | "PROG" | "RING"
+                        | "TXT" | "IMG" | "ICON" | "PROG" | "RING" | "CANVAS"
                 ) {
                     self.diagnostics.push(
                         Diagnostic::error(
                             "E_UNKNOWN_WIDGET",
                             Phase::Checker,
                             format!(
-                                "unknown widget `{}` in `{}` (not one of the 15 base primitives)",
+                                "unknown widget `{}` in `{}` (not one of the 16 base primitives)",
                                 ui.widget, node.id
                             ),
                             node.span,
                         )
                         .with_node_id(node.id.as_str())
-                        .with_expected("ROOT, FLEX, LIST, ROUTER, MODAL, NAV, BTN, INP, SEL, SW, TXT, IMG, ICON, PROG, RING, or alias.ExtWidget")
+                        .with_expected("ROOT, FLEX, LIST, ROUTER, MODAL, NAV, BTN, INP, SEL, SW, TXT, IMG, ICON, PROG, RING, CANVAS, or alias.ExtWidget")
                         .with_found(ui.widget.clone())
-                        .with_fix_hint("Use one of the 15 base primitives, import a pure-AION library with `#USE`, or declare a native `#EXT` widget."),
+                        .with_fix_hint("Use one of the 16 base primitives, import a pure-AION library with `#USE`, or declare a native `#EXT` widget."),
                     );
                 }
 
@@ -926,6 +931,7 @@ impl<'a> Checker<'a> {
                 let bound_idx = match ui.widget.as_str() {
                     "INP" | "SEL" | "SELECT" | "SW" | "SWITCH" | "RING" => Some(4),
                     "PROG" => Some(5),
+                    "CANVAS" => Some(3),
                     "MODAL" => Some(0),
                     _ => None,
                 };

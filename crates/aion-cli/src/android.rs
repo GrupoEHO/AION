@@ -538,6 +538,7 @@ import android.text.TextWatcher;
 import android.util.DisplayMetrics;
 import android.util.TypedValue;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
@@ -595,7 +596,9 @@ public class MainActivity extends Activity {{
     private final List<TextBinding> textBindings = new ArrayList<>();
     private final List<Runnable> listUpdaters = new ArrayList<>();
     private float currentScale = 1f;
-    private final ExecutorService executor = Executors.newSingleThreadExecutor();
+    private final ExecutorService executor = Executors.newFixedThreadPool(
+        Math.max(4, Runtime.getRuntime().availableProcessors())
+    );
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final List<View> shapeViews = new ArrayList<>();
     private boolean ticking = false;
@@ -808,6 +811,12 @@ public class MainActivity extends Activity {{
                 IconView ic = new IconView(tpl, parseColorSafe(colorHex, Color.BLACK));
                 shapeViews.add(ic);
                 view = ic;
+            }} else if ("CANVAS".equals(widget)) {{
+                String bgHex = getStringArg(args, 2, "#0F172A");
+                String cmdSig = getStringArg(args, 3, null);
+                CanvasView cv = new CanvasView(ui, parseColorSafe(bgHex, Color.BLACK), cmdSig, scale);
+                shapeViews.add(cv);
+                view = cv;
             }} else if ("PROG".equals(widget) || "RING".equals(widget)) {{
                 boolean isRing = "RING".equals(widget);
                 ShapeView sh = isRing
@@ -1534,6 +1543,145 @@ public class MainActivity extends Activity {{
     private String readAsset(String name) throws Exception {{
         try (InputStream is = getAssets().open(name)) {{
             return readStream(is);
+        }}
+    }}
+
+    private class CanvasView extends View {{
+        private final JSONObject uiNode;
+        private final int bgColor;
+        private final String cmdSig;
+        private final float scale;
+        private final Paint fillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint strokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Path tmpPath = new Path();
+        private final RectF tmpRect = new RectF();
+
+        CanvasView(JSONObject uiNode, int bgColor, String cmdSig, float scale) {{
+            super(MainActivity.this);
+            this.uiNode = uiNode;
+            this.bgColor = bgColor;
+            this.cmdSig = cmdSig;
+            this.scale = scale;
+            fillPaint.setStyle(Paint.Style.FILL);
+            strokePaint.setStyle(Paint.Style.STROKE);
+            strokePaint.setStrokeCap(Paint.Cap.ROUND);
+            strokePaint.setStrokeJoin(Paint.Join.ROUND);
+        }}
+
+        @Override
+        public boolean onTouchEvent(MotionEvent e) {{
+            JSONArray evs = uiNode.optJSONArray("events");
+            if (evs == null || evs.length() == 0) return false;
+            int action = e.getActionMasked();
+            if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_MOVE) {{
+                try {{
+                    JSONObject pt = new JSONObject();
+                    pt.put("x", Math.round(e.getX() / scale));
+                    pt.put("y", Math.round(e.getY() / scale));
+                    runNodeEvent(uiNode, action == MotionEvent.ACTION_DOWN ? "tap" : "drag", pt, 0);
+                    updateTexts();
+                }} catch (Exception ignored) {{}}
+                return true;
+            }}
+            return super.onTouchEvent(e);
+        }}
+
+        @Override
+        protected void onDraw(Canvas canvas) {{
+            super.onDraw(canvas);
+            canvas.drawColor(bgColor);
+            if (cmdSig == null) return;
+            Object raw = signals.get(cmdSig);
+            if (!(raw instanceof JSONArray)) return;
+            JSONArray cmds = (JSONArray) raw;
+            for (int i = 0; i < cmds.length(); i++) {{
+                JSONObject c = cmds.optJSONObject(i);
+                if (c == null) continue;
+                String op = c.optString("op", "");
+                if ("rect".equals(op)) {{
+                    float x = (float) c.optDouble("x", 0) * scale;
+                    float y = (float) c.optDouble("y", 0) * scale;
+                    float w = (float) c.optDouble("w", 0) * scale;
+                    float h = (float) c.optDouble("h", 0) * scale;
+                    float r = (float) c.optDouble("r", 0) * scale;
+                    tmpRect.set(x, y, x + w, y + h);
+                    String f = c.optString("fill", "");
+                    if (!f.isEmpty()) {{ fillPaint.setColor(parseColorSafe(f, Color.WHITE)); canvas.drawRoundRect(tmpRect, r, r, fillPaint); }}
+                    String st = c.optString("stroke", "");
+                    if (!st.isEmpty()) {{ strokePaint.setColor(parseColorSafe(st, Color.WHITE)); strokePaint.setStrokeWidth((float) c.optDouble("sw", 2) * scale); canvas.drawRoundRect(tmpRect, r, r, strokePaint); }}
+                }} else if ("circle".equals(op)) {{
+                    float cx = (float) c.optDouble("cx", 0) * scale;
+                    float cy = (float) c.optDouble("cy", 0) * scale;
+                    float r = Math.max(0f, (float) c.optDouble("r", 0) * scale);
+                    String f = c.optString("fill", "");
+                    if (!f.isEmpty()) {{ fillPaint.setColor(parseColorSafe(f, Color.WHITE)); canvas.drawCircle(cx, cy, r, fillPaint); }}
+                    String st = c.optString("stroke", "");
+                    if (!st.isEmpty()) {{ strokePaint.setColor(parseColorSafe(st, Color.WHITE)); strokePaint.setStrokeWidth((float) c.optDouble("sw", 2) * scale); canvas.drawCircle(cx, cy, r, strokePaint); }}
+                }} else if ("arc".equals(op)) {{
+                    float cx = (float) c.optDouble("cx", 0) * scale;
+                    float cy = (float) c.optDouble("cy", 0) * scale;
+                    float r = Math.max(0f, (float) c.optDouble("r", 0) * scale);
+                    float start = (float) c.optDouble("start", 0);
+                    float sweep = (float) c.optDouble("sweep", 90);
+                    tmpRect.set(cx - r, cy - r, cx + r, cy + r);
+                    strokePaint.setColor(parseColorSafe(c.optString("stroke", "#2563EB"), Color.BLUE));
+                    strokePaint.setStrokeWidth((float) c.optDouble("sw", 2) * scale);
+                    canvas.drawArc(tmpRect, start, sweep, false, strokePaint);
+                }} else if ("line".equals(op)) {{
+                    strokePaint.setColor(parseColorSafe(c.optString("stroke", "#FFFFFF"), Color.WHITE));
+                    strokePaint.setStrokeWidth((float) c.optDouble("sw", 2) * scale);
+                    canvas.drawLine(
+                        (float) c.optDouble("x1", 0) * scale,
+                        (float) c.optDouble("y1", 0) * scale,
+                        (float) c.optDouble("x2", 0) * scale,
+                        (float) c.optDouble("y2", 0) * scale,
+                        strokePaint
+                    );
+                }} else if ("path".equals(op)) {{
+                    String d = c.optString("d", "");
+                    if (!d.isEmpty()) {{
+                        tmpPath.reset();
+                        parseSvgPath(d, scale, tmpPath);
+                        String f = c.optString("fill", "");
+                        if (!f.isEmpty()) {{ fillPaint.setColor(parseColorSafe(f, Color.WHITE)); canvas.drawPath(tmpPath, fillPaint); }}
+                        String st = c.optString("stroke", "");
+                        if (!st.isEmpty()) {{ strokePaint.setColor(parseColorSafe(st, Color.WHITE)); strokePaint.setStrokeWidth((float) c.optDouble("sw", 2) * scale); canvas.drawPath(tmpPath, strokePaint); }}
+                    }}
+                }} else if ("text".equals(op)) {{
+                    textPaint.setColor(parseColorSafe(c.optString("color", "#FFFFFF"), Color.WHITE));
+                    textPaint.setTextSize((float) c.optDouble("size", 14) * scale);
+                    canvas.drawText(c.optString("text", ""), (float) c.optDouble("x", 0) * scale, (float) c.optDouble("y", 0) * scale, textPaint);
+                }} else if ("pixel".equals(op)) {{
+                    float x = (float) c.optDouble("x", 0) * scale;
+                    float y = (float) c.optDouble("y", 0) * scale;
+                    float sz = Math.max(1f, (float) c.optDouble("size", 1)) * scale;
+                    fillPaint.setColor(parseColorSafe(c.optString("color", "#FFFFFF"), Color.WHITE));
+                    canvas.drawRect(x, y, x + sz, y + sz, fillPaint);
+                }} else if ("pixels".equals(op)) {{
+                    JSONArray pts = c.optJSONArray("pts");
+                    float sz = Math.max(1f, (float) c.optDouble("size", 1)) * scale;
+                    String defC = c.optString("color", "#FFFFFF");
+                    if (pts != null) {{
+                        for (int j = 0; j < pts.length(); j++) {{
+                            Object item = pts.opt(j);
+                            if (item instanceof JSONArray) {{
+                                JSONArray pa = (JSONArray) item;
+                                float px = (float) pa.optDouble(0, 0) * scale;
+                                float py = (float) pa.optDouble(1, 0) * scale;
+                                fillPaint.setColor(parseColorSafe(pa.optString(2, defC), Color.WHITE));
+                                canvas.drawRect(px, py, px + sz, py + sz, fillPaint);
+                            }} else if (item instanceof JSONObject) {{
+                                JSONObject po = (JSONObject) item;
+                                float px = (float) po.optDouble("x", 0) * scale;
+                                float py = (float) po.optDouble("y", 0) * scale;
+                                fillPaint.setColor(parseColorSafe(po.optString("color", defC), Color.WHITE));
+                                canvas.drawRect(px, py, px + sz, py + sz, fillPaint);
+                            }}
+                        }}
+                    }}
+                }}
+            }}
         }}
     }}
 

@@ -613,6 +613,96 @@ const WEB_SHELL_HTML: &str = r#"<!doctype html>
             svg.appendChild(p);
           }
           el.appendChild(svg);
+        } else if (ui.widget === 'CANVAS') {
+          const bgHex = ui.args[2]?.value ?? '#0F172A';
+          const cmdSig = ui.args[3]?.value;
+          const cmds = Array.isArray(sigVal(cmdSig)) ? sigVal(cmdSig) : [];
+          el = document.createElement('canvas');
+          el.className = 'aion-node';
+          const hasEvents = (ui.events || []).length > 0;
+          el.style.pointerEvents = hasEvents ? 'auto' : 'none';
+          el.style.cursor = hasEvents ? 'crosshair' : 'default';
+          el.style.touchAction = 'none';
+          const dpr = window.devicePixelRatio || 1;
+          el.width = Math.max(1, Math.round(box.width * dpr));
+          el.height = Math.max(1, Math.round(box.height * dpr));
+          const ctx = el.getContext('2d');
+          if (ctx) {
+            ctx.scale(dpr, dpr);
+            ctx.fillStyle = bgHex;
+            ctx.fillRect(0, 0, box.width, box.height);
+            for (const c of cmds) {
+              if (!c || typeof c !== 'object') continue;
+              const op = c.op;
+              ctx.save();
+              ctx.lineCap = 'round';
+              ctx.lineJoin = 'round';
+              if (op === 'rect') {
+                const r = Number(c.r) || 0;
+                ctx.beginPath();
+                if (r > 0 && ctx.roundRect) ctx.roundRect(Number(c.x)||0, Number(c.y)||0, Number(c.w)||0, Number(c.h)||0, r);
+                else ctx.rect(Number(c.x)||0, Number(c.y)||0, Number(c.w)||0, Number(c.h)||0);
+                if (c.fill) { ctx.fillStyle = c.fill; ctx.fill(); }
+                if (c.stroke) { ctx.strokeStyle = c.stroke; ctx.lineWidth = Number(c.sw)||2; ctx.stroke(); }
+              } else if (op === 'circle') {
+                ctx.beginPath();
+                ctx.arc(Number(c.cx)||0, Number(c.cy)||0, Math.max(0, Number(c.r)||0), 0, Math.PI * 2);
+                if (c.fill) { ctx.fillStyle = c.fill; ctx.fill(); }
+                if (c.stroke) { ctx.strokeStyle = c.stroke; ctx.lineWidth = Number(c.sw)||2; ctx.stroke(); }
+              } else if (op === 'arc') {
+                const st = ((Number(c.start)||0) * Math.PI) / 180;
+                const sw = ((Number(c.sweep)||90) * Math.PI) / 180;
+                ctx.beginPath();
+                ctx.arc(Number(c.cx)||0, Number(c.cy)||0, Math.max(0, Number(c.r)||0), st, st + sw, sw < 0);
+                ctx.strokeStyle = c.stroke || '#2563EB';
+                ctx.lineWidth = Number(c.sw)||2;
+                ctx.stroke();
+              } else if (op === 'line') {
+                ctx.beginPath();
+                ctx.moveTo(Number(c.x1)||0, Number(c.y1)||0);
+                ctx.lineTo(Number(c.x2)||0, Number(c.y2)||0);
+                ctx.strokeStyle = c.stroke || '#FFFFFF';
+                ctx.lineWidth = Number(c.sw)||2;
+                ctx.stroke();
+              } else if (op === 'path' && c.d) {
+                const p2d = new Path2D(String(c.d));
+                if (c.fill) { ctx.fillStyle = c.fill; ctx.fill(p2d); }
+                if (c.stroke) { ctx.strokeStyle = c.stroke; ctx.lineWidth = Number(c.sw)||2; ctx.stroke(p2d); }
+              } else if (op === 'text') {
+                ctx.font = (Number(c.size)||14) + 'px -apple-system, BlinkMacSystemFont, sans-serif';
+                ctx.fillStyle = c.color || '#FFFFFF';
+                ctx.fillText(String(c.text ?? ''), Number(c.x)||0, Number(c.y)||0);
+              } else if (op === 'pixel') {
+                const sz = Math.max(1, Number(c.size)||1);
+                ctx.fillStyle = c.color || '#FFFFFF';
+                ctx.fillRect(Number(c.x)||0, Number(c.y)||0, sz, sz);
+              } else if (op === 'pixels' && Array.isArray(c.pts)) {
+                const sz = Math.max(1, Number(c.size)||1);
+                for (const pt of c.pts) {
+                  if (Array.isArray(pt)) {
+                    ctx.fillStyle = pt[2] || c.color || '#FFFFFF';
+                    ctx.fillRect(Number(pt[0])||0, Number(pt[1])||0, sz, sz);
+                  } else if (pt && typeof pt === 'object') {
+                    ctx.fillStyle = pt.color || c.color || '#FFFFFF';
+                    ctx.fillRect(Number(pt.x)||0, Number(pt.y)||0, sz, sz);
+                  }
+                }
+              }
+              ctx.restore();
+            }
+          }
+          if (hasEvents) {
+            const firePt = async (evName, ev) => {
+              const rect = el.getBoundingClientRect();
+              const pt = { x: Math.round(ev.clientX - rect.left), y: Math.round(ev.clientY - rect.top) };
+              await runNodeEvent(ui, evName, { item: pt, index: 0 });
+              renderStage();
+            };
+            el.onpointerdown = (ev) => { el._aionDown = true; firePt('tap', ev); };
+            el.onpointermove = (ev) => { if (el._aionDown) firePt('drag', ev); };
+            el.onpointerup = () => { el._aionDown = false; };
+            el.onpointerleave = () => { el._aionDown = false; };
+          }
         } else if (ui.widget === 'PROG') {
           el = document.createElement('div');
           el.className = 'aion-node';

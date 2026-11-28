@@ -1589,6 +1589,95 @@ struct AionNodeView: View {
                     style: StrokeStyle(lineWidth: max(1.5, 2.0 * (size / 24.0)), lineCap: .round, lineJoin: .round)
                 )
                 .allowsHitTesting(false)
+        case "CANVAS":
+            let bgHex = store.argString(args, 2, "#0F172A")
+            let cmdSig = store.argStringOpt(args, 3)
+            let cmds = (cmdSig.flatMap { store.signals[$0] as? [[String: Any]] }) ?? []
+            let hasEvents = !((ui["events"] as? [[String: Any]]) ?? []).isEmpty
+            Canvas { ctx, size in
+                ctx.fill(Path(CGRect(origin: .zero, size: size)), with: .color(Color(aionHex: bgHex)))
+                for c in cmds {
+                    let op = c["op"] as? String ?? ""
+                    func num(_ k: String, _ d: CGFloat = 0) -> CGFloat {
+                        if let v = c[k] as? Double { return CGFloat(v) }
+                        if let v = c[k] as? Int { return CGFloat(v) }
+                        return d
+                    }
+                    switch op {
+                    case "rect":
+                        let rect = CGRect(x: num("x") * scale, y: num("y") * scale, width: num("w") * scale, height: num("h") * scale)
+                        let r = num("r") * scale
+                        let p = Path(roundedRect: rect, cornerRadius: r)
+                        if let f = c["fill"] as? String, !f.isEmpty { ctx.fill(p, with: .color(Color(aionHex: f))) }
+                        if let st = c["stroke"] as? String, !st.isEmpty { ctx.stroke(p, with: .color(Color(aionHex: st)), lineWidth: num("sw", 2) * scale) }
+                    case "circle":
+                        let r = max(0, num("r") * scale)
+                        let rect = CGRect(x: num("cx") * scale - r, y: num("cy") * scale - r, width: r * 2, height: r * 2)
+                        let p = Path(ellipseIn: rect)
+                        if let f = c["fill"] as? String, !f.isEmpty { ctx.fill(p, with: .color(Color(aionHex: f))) }
+                        if let st = c["stroke"] as? String, !st.isEmpty { ctx.stroke(p, with: .color(Color(aionHex: st)), lineWidth: num("sw", 2) * scale) }
+                    case "arc":
+                        let r = max(0, num("r") * scale)
+                        let stDeg = Double(num("start"))
+                        let swDeg = Double(num("sweep", 90))
+                        var p = Path()
+                        p.addArc(center: CGPoint(x: num("cx") * scale, y: num("cy") * scale), radius: r, startAngle: .degrees(stDeg), endAngle: .degrees(stDeg + swDeg), clockwise: swDeg < 0)
+                        let st = c["stroke"] as? String ?? "#2563EB"
+                        ctx.stroke(p, with: .color(Color(aionHex: st)), style: StrokeStyle(lineWidth: num("sw", 2) * scale, lineCap: .round))
+                    case "line":
+                        var p = Path()
+                        p.move(to: CGPoint(x: num("x1") * scale, y: num("y1") * scale))
+                        p.addLine(to: CGPoint(x: num("x2") * scale, y: num("y2") * scale))
+                        let st = c["stroke"] as? String ?? "#FFFFFF"
+                        ctx.stroke(p, with: .color(Color(aionHex: st)), style: StrokeStyle(lineWidth: num("sw", 2) * scale, lineCap: .round))
+                    case "path":
+                        if let d = c["d"] as? String, !d.isEmpty {
+                            let p = AionIconShape(pathData: d).path(in: CGRect(x: 0, y: 0, width: 24 * scale, height: 24 * scale))
+                            if let f = c["fill"] as? String, !f.isEmpty { ctx.fill(p, with: .color(Color(aionHex: f))) }
+                            if let st = c["stroke"] as? String, !st.isEmpty { ctx.stroke(p, with: .color(Color(aionHex: st)), style: StrokeStyle(lineWidth: num("sw", 2) * scale, lineCap: .round, lineJoin: .round)) }
+                        }
+                    case "text":
+                        let txt = c["text"] as? String ?? ""
+                        let sz = num("size", 14) * scale
+                        let col = c["color"] as? String ?? "#FFFFFF"
+                        ctx.draw(Text(txt).font(.system(size: sz)).foregroundColor(Color(aionHex: col)), at: CGPoint(x: num("x") * scale, y: num("y") * scale), anchor: .bottomLeading)
+                    case "pixel":
+                        let sz = max(1, num("size", 1)) * scale
+                        let col = c["color"] as? String ?? "#FFFFFF"
+                        ctx.fill(Path(CGRect(x: num("x") * scale, y: num("y") * scale, width: sz, height: sz)), with: .color(Color(aionHex: col)))
+                    case "pixels":
+                        let sz = max(1, num("size", 1)) * scale
+                        let defC = c["color"] as? String ?? "#FFFFFF"
+                        if let pts = c["pts"] as? [Any] {
+                            for rawPt in pts {
+                                if let pa = rawPt as? [Any], pa.count >= 2 {
+                                    let px = CGFloat((pa[0] as? Double) ?? Double((pa[0] as? Int) ?? 0)) * scale
+                                    let py = CGFloat((pa[1] as? Double) ?? Double((pa[1] as? Int) ?? 0)) * scale
+                                    let pc = (pa.count >= 3 ? (pa[2] as? String) : nil) ?? defC
+                                    ctx.fill(Path(CGRect(x: px, y: py, width: sz, height: sz)), with: .color(Color(aionHex: pc)))
+                                } else if let po = rawPt as? [String: Any] {
+                                    let px = CGFloat((po["x"] as? Double) ?? Double((po["x"] as? Int) ?? 0)) * scale
+                                    let py = CGFloat((po["y"] as? Double) ?? Double((po["y"] as? Int) ?? 0)) * scale
+                                    let pc = (po["color"] as? String) ?? defC
+                                    ctx.fill(Path(CGRect(x: px, y: py, width: sz, height: sz)), with: .color(Color(aionHex: pc)))
+                                }
+                            }
+                        }
+                    default:
+                        break
+                    }
+                }
+            }
+            .allowsHitTesting(hasEvents)
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { v in
+                        if !hasEvents { return }
+                        let pt: [String: Any] = ["x": Double(round(v.location.x / scale)), "y": Double(round(v.location.y / scale))]
+                        let isStart = v.translation.width == 0 && v.translation.height == 0
+                        store.runNodeEvent(ui, eventName: isStart ? "tap" : "drag", item: pt, index: 0)
+                    }
+            )
         case "PROG":
             let radius = store.argFloat(args, 2, 6) * scale
             let trackHex = store.argString(args, 3, "#E2E8F0")

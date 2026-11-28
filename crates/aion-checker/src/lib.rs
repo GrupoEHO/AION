@@ -433,4 +433,20 @@ mod tests {
         assert!(!bad_rep2.ok);
         assert_eq!(bad_rep2.diagnostics[0].code, "E_UNKNOWN_ICON");
     }
+
+    #[test]
+    fn validates_canvas_primitive_with_draw_ops_and_pointer_events() {
+        let src = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/canvas_paint.aion"),
+        )
+        .expect("read canvas_paint.aion");
+        let prog = parse_program(&src).expect("parse canvas_paint.aion");
+        let reg = mock_registry();
+        let report = check_program(&prog, &reg);
+        assert!(
+            report.ok,
+            "expected zero errors for canvas_paint.aion, got: {}",
+            report.to_json_pretty().unwrap()
+        );
+    }
 }

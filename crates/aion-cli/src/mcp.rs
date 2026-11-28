@@ -483,6 +483,7 @@ fn call_tool(
                     "SW": "SW[width, height, #OFF_HEX, #ON_HEX, #S_bool] @change->... (native boolean toggle switch)",
                     "IMG": "IMG[width, height, radius, cover|contain]{\"https://...\" | \"{#S_url}\"}",
                     "ICON": "ICON[size, color_hex]{\"home\" | \"pack:name\" | \"{#S_icon}\"}",
+                    "CANVAS": "CANVAS[width, height, bg_hex, #S_cmds] @tap->... @drag->... (ops: rect, circle, arc, line, path, text, pixel, pixels; item.x/item.y local coords)",
                     "PROG": "PROG[width, height, radius, #TRACK_HEX, #FILL_HEX, #S_pct] (linear progress bar, 0..100)",
                     "RING": "RING[size, thickness, #TRACK_HEX, #FILL_HEX, #S_pct] (circular progress ring, 0..100)",
                     "MODAL": "MODAL[#S_open]{#N_dialog} (full-screen dialog overlay visible while #S_open is truthy)",

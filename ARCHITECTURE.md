@@ -17,7 +17,7 @@ Contiene únicamente la gramática plana, el sistema de tipos y las garantías e
 
 ---
 
-## Capa 2: Framework Visual Base (`aion-ui`) — *15 primitivas ortogonales*
+## Capa 2: Framework Visual Base (`aion-ui`) — *16 primitivas ortogonales (conjunto final cerrado)*
 
 Conjunto mínimo y componible medido por Taffy y compilado 1:1 a Web/WASM, Android nativo y SwiftUI:
 
@@ -25,15 +25,17 @@ Conjunto mínimo y componible medido por Taffy y compilado 1:1 a Web/WASM, Andro
 | :--- | :--- | :--- |
 | **Estructura y navegación (6)** | `ROOT`, `FLEX`, `LIST`, `ROUTER`, `MODAL`, `NAV` | Contenedores, listas dinámicas `list<#M>`, multipantalla y diálogos |
 | **Entrada / Formularios (4)** | `BTN`, `INP`, `SEL`, `SW` | Botones, texto/números, dropdown nativo, switch booleano |
-| **Presentación (5)** | `TXT`, `IMG`, `ICON`, `PROG`, `RING` | Texto reactivo, imágenes, iconos vectoriales, barra lineal y anillo circular de progreso |
+| **Presentación y gráficos (6)** | `TXT`, `IMG`, `ICON`, `PROG`, `RING`, `CANVAS` | Texto reactivo, imágenes, iconos vectoriales, progreso lineal/circular y lienzo vectorial/por píxel (`CustomPaint`) |
 
-Widgets compuestos (tarjetas, calendarios, selectores complejos, temas) deben construirse componiendo estas 15 primitivas en librerías externas importables mediante `#USE "ruta/lib.aion"`, sin añadir sintaxis especial al compilador.
+Widgets compuestos (tarjetas, calendarios, gráficas, firmas, selectores complejos, temas) deben construirse componiendo estas 16 primitivas (incluyendo `CANVAS`) en librerías externas importables mediante `#USE "ruta/lib.aion"`, sin añadir sintaxis especial al compilador.
 
-> **Regla de congelamiento visual:** Las 15 primitivas de `aion-ui` son el conjunto base cerrado del lenguaje. **Todo widget que no esté entre estas 15 primitivas directas DEBE implementarse como librería externa**, ya sea:
+> **Regla de congelamiento visual:** Las 16 primitivas de `aion-ui` son el conjunto base cerrado definitivo del lenguaje. **Todo widget que no esté entre estas 16 primitivas directas DEBE implementarse como librería externa**, ya sea:
 > 1. **Librería externa de UI compuesta (100% AION)** importada con `#USE "ruta/componente.aion"`, o
 > 2. **Librería externa nativa (`#EXT`)** declarando widgets en su manifiesto ABI (`widgets`) e invocada como `#N_id:alias.WidgetName[w, h, ...]{}` (verificada estáticamente por `aion_check` y medida por Taffy).
 >
 > Para **iconos**, `ICON[size, color]{"nombre"}` incluye un catálogo base curado en `aion/std` (~65 iconos generales vectoriales 24×24, estilo Flutter `Icons.*`), y además permite importar o exportar packs externos/propios mediante `#EXT:pack = "org/icons@1.0"` (campo `icons` en el manifiesto ABI) usando `"pack:nombre"`.
+>
+> Para **gráficos personalizados y dibujo píxel por píxel**, `CANVAS[width, height, bg_hex, #S_cmds]` renderiza comandos declarativos (`rect`, `circle`, `arc`, `line`, `path`, `text`, `pixel`, `pixels`) sobre `<canvas>` 2D HiDPI (Web/WASM), `android.graphics.Canvas` (Android) y SwiftUI `Canvas` / Metal (iOS), con eventos `@tap` y `@drag` exponiendo coordenadas locales `item.x` y `item.y`.
 
 ---
 

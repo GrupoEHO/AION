@@ -571,6 +571,17 @@ fn ui_node_to_style(ui: &UiNode, signals: Option<&SignalStore>) -> (Style, bool)
             };
             (style, false)
         }
+        "CANVAS" => {
+            // CANVAS[width, height, bg_hex, #S_cmds]
+            let width = arg_as_dim(ui.args.first()).unwrap_or_else(|| length(300.0_f32));
+            let height = arg_as_dim(ui.args.get(1)).unwrap_or_else(|| length(200.0_f32));
+            let style = Style {
+                flex_shrink: 0.0,
+                size: Size { width, height },
+                ..Default::default()
+            };
+            (style, false)
+        }
         "PROG" => {
             // PROG[width, height, radius, #track, #fill, #S_pct]  (pct 0..100)
             let width = arg_as_dim(ui.args.first()).unwrap_or_else(|| length(200.0_f32));
