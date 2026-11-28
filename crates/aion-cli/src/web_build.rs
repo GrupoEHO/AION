@@ -9,10 +9,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 /// Metadata read automatically from `aion.toml` when running `aion build` inside a project folder.
+/// Supports Flutter-style `version = "1.2.3+14"` (or separate `build = 14`) and `aion_version`.
 #[derive(Debug, Clone, Default)]
 pub struct ProjectMeta {
     pub name: Option<String>,
     pub version: Option<String>,
+    pub build_number: Option<u32>,
+    pub aion_version: Option<String>,
     pub entry: Option<String>,
     pub app_id: Option<String>,
 }
@@ -23,31 +26,68 @@ impl ProjectMeta {
         let Ok(raw) = fs::read_to_string(&toml_path) else {
             return Self::default();
         };
+        Self::parse_toml_str(&raw)
+    }
+
+    pub fn parse_toml_str(raw: &str) -> Self {
         let mut meta = Self::default();
+        let mut in_project = true;
         for line in raw.lines() {
             let trimmed = line.trim();
-            if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with('[') {
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+            if trimmed.starts_with('[') && trimmed.ends_with(']') {
+                in_project = trimmed == "[project]";
+                continue;
+            }
+            if !in_project {
                 continue;
             }
             if let Some((k, v)) = trimmed.split_once('=') {
                 let key = k.trim();
-                let val = v.trim().trim_matches('"').trim_matches('\'').to_string();
+                let raw_val = v.split('#').next().unwrap_or("").trim();
+                let val = raw_val.trim_matches('"').trim_matches('\'').to_string();
                 match key {
                     "name" => meta.name = Some(val),
-                    "version" => meta.version = Some(val),
+                    "version" => {
+                        if let Some((ver_part, build_part)) = val.split_once('+') {
+                            meta.version = Some(ver_part.trim().to_string());
+                            if let Ok(bn) = build_part.trim().parse::<u32>() {
+                                meta.build_number = Some(bn);
+                            }
+                        } else {
+                            meta.version = Some(val);
+                        }
+                    }
+                    "build" | "build_number" | "version_code" => {
+                        if let Ok(bn) = val.parse::<u32>() {
+                            meta.build_number = Some(bn);
+                        }
+                    }
+                    "aion_version" | "aion" => meta.aion_version = Some(val),
                     "entry" => meta.entry = Some(val),
-                    "app_id" => meta.app_id = Some(val),
+                    "app_id" | "bundle_id" => meta.app_id = Some(val),
                     _ => {}
                 }
             }
         }
         meta
     }
+
+    pub fn full_version(&self) -> String {
+        let ver = self.version.as_deref().unwrap_or("0.1.0");
+        let bn = self.build_number.unwrap_or(1);
+        format!("{ver}+{bn}")
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebBuildOptions {
     pub app_name: String,
+    pub version_name: String,
+    pub build_number: u32,
+    pub aion_version: String,
     pub api_base_url: Option<String>,
     pub out_dir: PathBuf,
     pub release: bool,
@@ -58,6 +98,9 @@ impl Default for WebBuildOptions {
     fn default() -> Self {
         Self {
             app_name: "AION App".to_string(),
+            version_name: "0.1.0".to_string(),
+            build_number: 1,
+            aion_version: env!("CARGO_PKG_VERSION").to_string(),
             api_base_url: None,
             out_dir: PathBuf::from("build/web"),
             release: true,
@@ -70,11 +113,15 @@ impl Default for WebBuildOptions {
 pub struct WebBuildResult {
     pub ok: bool,
     pub app_name: String,
+    pub version: String,
+    pub build_number: u32,
+    pub aion_version: String,
     pub mode: String,
     pub wasm: bool,
     pub out_dir: String,
     pub index_html_path: String,
     pub bundle_json_path: String,
+    pub version_json_path: String,
     pub proto_path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wasm_path: Option<String>,
@@ -118,8 +165,15 @@ pub fn build_web_bundle(
         .clone()
         .unwrap_or_else(|| format!("http://127.0.0.1:{default_port}"));
 
+    let full_version = format!("{}+{}", opts.version_name, opts.build_number);
+    let cache_tag = format!("{}-{}", opts.version_name, opts.build_number);
+
     let bundle_payload = json!({
         "appName": opts.app_name,
+        "version": opts.version_name,
+        "buildNumber": opts.build_number,
+        "fullVersion": full_version,
+        "aionVersion": opts.aion_version,
         "mode": if opts.release { "release" } else { "debug" },
         "apiBaseUrl": api_base_url,
         "program": program,
@@ -131,34 +185,51 @@ pub fn build_web_bundle(
         "proto": proto,
     });
 
+    let version_payload = json!({
+        "appName": opts.app_name,
+        "version": opts.version_name,
+        "buildNumber": opts.build_number,
+        "fullVersion": full_version,
+        "aionVersion": opts.aion_version,
+    });
+
     let bundle_json = if opts.release {
         serde_json::to_string(&bundle_payload).unwrap()
     } else {
         serde_json::to_string_pretty(&bundle_payload).unwrap()
     };
+    let version_json = serde_json::to_string_pretty(&version_payload).unwrap();
 
     let bundle_json_path = opts.out_dir.join("aion_bundle.json");
+    let version_json_path = opts.out_dir.join("version.json");
     let proto_path = opts.out_dir.join("schema.proto");
     let index_html_path = opts.out_dir.join("index.html");
 
     fs::write(&bundle_json_path, &bundle_json)
         .map_err(|e| format!("write aion_bundle.json: {e}"))?;
+    fs::write(&version_json_path, &version_json)
+        .map_err(|e| format!("write version.json: {e}"))?;
     fs::write(&proto_path, &proto).map_err(|e| format!("write schema.proto: {e}"))?;
 
     let (html, wasm_path, wasm_size_bytes) = if opts.wasm {
         let (wp, wsize) = compile_wasm_runtime(&opts.out_dir, opts.release)?;
         (
-            generate_wasm_index_html(&opts.app_name),
+            generate_wasm_index_html(&opts.app_name, &full_version, &cache_tag, &opts.aion_version),
             Some(wp.display().to_string()),
             Some(wsize),
         )
     } else {
-        (generate_prod_index_html(&opts.app_name), None, None)
+        (
+            generate_prod_index_html(&opts.app_name, &full_version, &cache_tag, &opts.aion_version),
+            None,
+            None,
+        )
     };
 
     fs::write(&index_html_path, &html).map_err(|e| format!("write index.html: {e}"))?;
 
     let total_size_bytes = bundle_json.len() as u64
+        + version_json.len() as u64
         + proto.len() as u64
         + html.len() as u64
         + wasm_size_bytes.unwrap_or(0);
@@ -166,11 +237,15 @@ pub fn build_web_bundle(
     Ok(WebBuildResult {
         ok: true,
         app_name: opts.app_name.clone(),
+        version: opts.version_name.clone(),
+        build_number: opts.build_number,
+        aion_version: opts.aion_version.clone(),
         mode: if opts.release { "release" } else { "debug" }.to_string(),
         wasm: opts.wasm,
         out_dir: opts.out_dir.display().to_string(),
         index_html_path: index_html_path.display().to_string(),
         bundle_json_path: bundle_json_path.display().to_string(),
+        version_json_path: version_json_path.display().to_string(),
         proto_path: proto_path.display().to_string(),
         wasm_path,
         wasm_size_bytes,
@@ -288,7 +363,12 @@ fn detect_wasm_bindgen() -> PathBuf {
     PathBuf::from("wasm-bindgen")
 }
 
-fn generate_wasm_index_html(app_name: &str) -> String {
+fn generate_wasm_index_html(
+    app_name: &str,
+    full_version: &str,
+    cache_tag: &str,
+    aion_version: &str,
+) -> String {
     let safe_title = app_name
         .replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -299,6 +379,8 @@ fn generate_wasm_index_html(app_name: &str) -> String {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="aion-version" content="{full_version}" />
+  <meta name="aion-sdk" content="{aion_version}" />
   <title>{safe_title}</title>
   <style>
     * {{ box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }}
@@ -318,8 +400,9 @@ fn generate_wasm_index_html(app_name: &str) -> String {
   <div id="stage"></div>
   <div id="toast"></div>
   <script type="module">
-    import init, {{ AionWasmApp }} from './pkg/aion_web_wasm.js';
+    import init, {{ AionWasmApp }} from './pkg/aion_web_wasm.js?v={cache_tag}';
 
+    const APP_VERSION = "{full_version}";
     let bundle = null;
     let wasmApp = null;
     let signalTypes = {{}};
@@ -935,9 +1018,25 @@ fn generate_wasm_index_html(app_name: &str) -> String {
       }}
     }}
 
+    async function checkForNewVersion() {{
+      try {{
+        const vr = await fetch('./version.json?t=' + Date.now(), {{ cache: 'no-store' }});
+        if (!vr.ok) return;
+        const info = await vr.json();
+        if (info?.fullVersion && info.fullVersion !== APP_VERSION) {{
+          const key = 'aion_reloaded:' + info.fullVersion;
+          if (!sessionStorage.getItem(key)) {{
+            sessionStorage.setItem(key, '1');
+            location.reload();
+          }}
+        }}
+      }} catch (_) {{}}
+    }}
+
     (async () => {{
-      await init();
-      const resp = await fetch('./aion_bundle.json');
+      checkForNewVersion();
+      await init('./pkg/aion_web_wasm_bg.wasm?v={cache_tag}');
+      const resp = await fetch('./aion_bundle.json?v={cache_tag}');
       const raw = await resp.text();
       bundle = JSON.parse(raw);
       wasmApp = new AionWasmApp(raw);
@@ -971,7 +1070,12 @@ fn extract_port(program: &Program) -> Option<u16> {
     None
 }
 
-fn generate_prod_index_html(app_name: &str) -> String {
+fn generate_prod_index_html(
+    app_name: &str,
+    full_version: &str,
+    cache_tag: &str,
+    aion_version: &str,
+) -> String {
     let safe_title = app_name
         .replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -982,6 +1086,8 @@ fn generate_prod_index_html(app_name: &str) -> String {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="aion-version" content="{full_version}" />
+  <meta name="aion-sdk" content="{aion_version}" />
   <title>{safe_title}</title>
   <style>
     * {{ box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }}
@@ -1609,8 +1715,25 @@ fn generate_prod_index_html(app_name: &str) -> String {
       updateSignalsUI();
     }}
 
+    const APP_VERSION = "{full_version}";
+    async function checkForNewVersion() {{
+      try {{
+        const vr = await fetch('./version.json?t=' + Date.now(), {{ cache: 'no-store' }});
+        if (!vr.ok) return;
+        const info = await vr.json();
+        if (info?.fullVersion && info.fullVersion !== APP_VERSION) {{
+          const key = 'aion_reloaded:' + info.fullVersion;
+          if (!sessionStorage.getItem(key)) {{
+            sessionStorage.setItem(key, '1');
+            location.reload();
+          }}
+        }}
+      }} catch (_) {{}}
+    }}
+
     (async () => {{
-      const resp = await fetch('./aion_bundle.json');
+      checkForNewVersion();
+      const resp = await fetch('./aion_bundle.json?v={cache_tag}');
       bundle = await resp.json();
       signals = {{ ...bundle.signals }};
       initPersisted();

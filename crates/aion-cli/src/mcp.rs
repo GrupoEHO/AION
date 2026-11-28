@@ -564,6 +564,12 @@ fn call_tool(
             if let Some(v) = args.get("app_name").and_then(Value::as_str) {
                 opts.app_name = v.to_string();
             }
+            if let Some(v) = args.get("version_name").and_then(Value::as_str) {
+                opts.version_name = v.to_string();
+            }
+            if let Some(v) = args.get("build_number").and_then(Value::as_u64) {
+                opts.build_number = v as u32;
+            }
             if let Some(v) = args.get("api_base_url").and_then(Value::as_str) {
                 opts.api_base_url = Some(v.to_string());
             }

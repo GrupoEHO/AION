@@ -56,6 +56,9 @@ fn main() {
     let manifests_dir = find_manifests_dir(&args);
 
     match cmd {
+        "--version" | "-V" | "version" => {
+            println!("aion {}", env!("CARGO_PKG_VERSION"));
+        }
         "create" => {
             if args.len() < 3 {
                 eprintln!("Usage: aion create <name> [dir]");
@@ -233,16 +236,23 @@ fn main() {
                     if let Some(ref ver) = meta.version {
                         opts.version_name = ver.clone();
                     }
+                    if let Some(bn) = meta.build_number {
+                        opts.version_code = bn;
+                    }
                     if let Some(v) = find_flag(&args, "--app-id") {
                         opts.app_id = v;
                     }
                     if let Some(v) = find_flag(&args, "--name") {
                         opts.app_name = v;
                     }
-                    if let Some(v) = find_flag(&args, "--version-code") {
+                    if let Some(v) = find_flag(&args, "--version-code")
+                        .or_else(|| find_flag(&args, "--build-number"))
+                    {
                         opts.version_code = v.parse().unwrap_or(1);
                     }
-                    if let Some(v) = find_flag(&args, "--version-name") {
+                    if let Some(v) = find_flag(&args, "--version-name")
+                        .or_else(|| find_flag(&args, "--version"))
+                    {
                         opts.version_name = v;
                     }
                     if let Some(v) = find_flag(&args, "--api-base-url") {
@@ -286,8 +296,27 @@ fn main() {
                     if let Some(ref name) = meta.name {
                         opts.app_name = name.clone();
                     }
+                    if let Some(ref ver) = meta.version {
+                        opts.version_name = ver.clone();
+                    }
+                    if let Some(bn) = meta.build_number {
+                        opts.build_number = bn;
+                    }
+                    if let Some(ref aion_v) = meta.aion_version {
+                        opts.aion_version = aion_v.clone();
+                    }
                     if let Some(v) = find_flag(&args, "--name") {
                         opts.app_name = v;
+                    }
+                    if let Some(v) = find_flag(&args, "--version")
+                        .or_else(|| find_flag(&args, "--version-name"))
+                    {
+                        opts.version_name = v;
+                    }
+                    if let Some(v) = find_flag(&args, "--build-number")
+                        .or_else(|| find_flag(&args, "--version-code"))
+                    {
+                        opts.build_number = v.parse().unwrap_or(1);
                     }
                     if let Some(v) = find_flag(&args, "--api-base-url") {
                         opts.api_base_url = Some(v);
@@ -331,6 +360,9 @@ fn main() {
                     }
                     if let Some(ref ver) = meta.version {
                         opts.version_name = ver.clone();
+                    }
+                    if let Some(bn) = meta.build_number {
+                        opts.build_number = bn;
                     }
                     if let Some(v) = find_flag(&args, "--bundle-id").or_else(|| find_flag(&args, "--app-id")) {
                         opts.bundle_id = v;

@@ -72,17 +72,36 @@ pub fn cmd_create(project_name: &str, base_dir: &Path) -> Result<serde_json::Val
     fs::create_dir_all(&project_dir)
         .map_err(|e| format!("failed to create {}: {e}", project_dir.display()))?;
 
+    let safe_pkg: String = trimmed
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
+    let default_app_id = if safe_pkg.is_empty() {
+        "com.aion.app".to_string()
+    } else {
+        format!("com.aion.{safe_pkg}")
+    };
+    let aion_sdk_ver = env!("CARGO_PKG_VERSION");
+
     let aion_toml = format!(
         r#"[project]
 name = "{trimmed}"
-version = "0.1.0"
+app_id = "{default_app_id}"
+version = "0.1.0+1"
+aion_version = "{aion_sdk_ver}"
 entry = "app.aion"
 targets = ["web", "android", "ios"]
 
 [ext]
-# Add external ABI modules as needed:
+# External native ABI modules (#EXT):
 # db = "aion/mongo@1.2"
 # auth = "aion/firebase-auth@2.0"
+# maps = "aion/maps@1.0"
+
+[libs]
+# External pure-AION UI libraries (imported with #USE "libs/..."):
+# ui = "libs/ui_kit.aion"
 "#
     );
 
@@ -507,17 +526,40 @@ mod tests {
 
         let opts = crate::web_build::WebBuildOptions {
             app_name: "Nidox Web".to_string(),
+            version_name: "1.2.3".to_string(),
+            build_number: 14,
             api_base_url: Some("https://api.nidox.app".to_string()),
             out_dir: tmp.clone(),
             release: true,
             wasm: false,
+            ..Default::default()
         };
         let res = crate::web_build::build_web_bundle(&prog, &opts).unwrap();
         assert!(res.ok);
         assert_eq!(res.mode, "release");
         assert!(tmp.join("index.html").is_file());
         assert!(tmp.join("aion_bundle.json").is_file());
+        assert!(tmp.join("version.json").is_file());
         assert!(tmp.join("schema.proto").is_file());
+
+        let html = fs::read_to_string(tmp.join("index.html")).unwrap();
+        assert!(html.contains("aion_bundle.json?v=1.2.3-14"));
+        assert!(html.contains("version.json"));
+
+        let meta = crate::web_build::ProjectMeta::parse_toml_str(
+            r#"
+[project]
+name = "BudgetApp"
+app_id = "com.aho.budget"
+version = "1.2.3+14"
+aion_version = "0.1.0"
+entry = "app.aion"
+"#,
+        );
+        assert_eq!(meta.version.as_deref(), Some("1.2.3"));
+        assert_eq!(meta.build_number, Some(14));
+        assert_eq!(meta.aion_version.as_deref(), Some("0.1.0"));
+        assert_eq!(meta.full_version(), "1.2.3+14");
 
         let bundle_raw = fs::read_to_string(tmp.join("aion_bundle.json")).unwrap();
         assert!(bundle_raw.contains("https://api.nidox.app"));

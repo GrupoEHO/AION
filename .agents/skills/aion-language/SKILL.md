@@ -20,7 +20,9 @@ description: >-
 
 ## 2. Installed CLI & MCP Tools
 - **CLI (on `$PATH`):**
-  - `aion create <name> [dir]` — Scaffolds a minimal canonical project (`aion.toml`, `app.aion`, `AGENTS.md`).
+  - `aion create <name> [dir]` — Scaffolds a minimal canonical project (`aion.toml` with `version = "0.1.0+1"` + `aion_version`, `app.aion`, `AGENTS.md`).
+  - `aion --version` — Prints the installed AION SDK version.
+  - Note on `aion.toml` versioning: Flutter-style `version = "1.2.3+14"` automatically sets Android `versionName`/`versionCode`, iOS `MARKETING_VERSION`/`CURRENT_PROJECT_VERSION`, and Web cache-busting (`?v=1.2.3-14` + `version.json` auto-reload).
   - `aion check <file.aion>` — Validates syntax, types, cycles, `#EXT` calls, `@err`, and layout (`mobile` + `desktop`) as JSON.
   - `aion parse <file.aion>` — Outputs flat AST JSON.
   - `aion fmt <file.aion> [--write]` — Formats `.aion` source canonically from the AST.
