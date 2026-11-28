@@ -237,6 +237,54 @@ mod tests {
     }
 
     #[test]
+    fn validates_countdown_timer_example_with_tick_guards_modal_ring_and_alarm() {
+        let src = include_str!("../../../examples/countdown_timer.aion");
+        let prog = parse_program(src).expect("countdown example must parse");
+        let reg = mock_registry();
+        let report = check_program(&prog, &reg);
+        assert!(report.ok, "{}", report.to_json_pretty().unwrap());
+
+        let root = prog.get(&aion_ast::NodeId::new("#N_root")).unwrap();
+        match &root.kind {
+            aion_ast::NodeKind::Ui(ui) => {
+                assert_eq!(ui.events.len(), 6);
+                assert!(ui.events.iter().all(|e| e.event == "tick" && e.guard.is_some()));
+            }
+            _ => panic!("expected ui"),
+        }
+
+        // Canonical formatter must preserve guards and re-check cleanly.
+        let formatted = aion_ast::format_program(&prog);
+        assert!(formatted.contains("@tick if "));
+        let again = parse_program(&formatted).expect("formatted countdown must re-parse");
+        assert!(check_program(&again, &reg).ok);
+
+        // Guards are type-checked: unknown identifier inside a guard must fail.
+        let bad = src.replacen("@tick if #S_running == 1 &&", "@tick if nope == 1 &&", 1);
+        let bad_prog = parse_program(&bad).unwrap();
+        assert!(!check_program(&bad_prog, &reg).ok);
+    }
+
+    #[test]
+    fn accepts_every_persist_syntax_variant() {
+        let reg = mock_registry();
+        for decl in [
+            "#S_a:i32=0 @persist",
+            "#S_a:i32 = 0 @persist",
+            "#S_a:str=\"\" @persist",
+            "#S_a:list<str>=[] @persist",
+            "#S_a:list<str> = [] @persist",
+            "#S_a:map<str,i32>={} @persist",
+            "#S_a:i32=0",
+        ] {
+            let src = format!("{decl}\n#S_b:bool=false\n");
+            let prog = parse_program(&src).unwrap_or_else(|e| panic!("`{decl}` failed: {e:?}"));
+            assert!(check_program(&prog, &reg).ok, "`{decl}` failed check");
+            assert_eq!(prog.nodes.len(), 2);
+        }
+    }
+
+    #[test]
     fn validates_semantic_ids_persist_init_and_dynamic_list_with_push_remove() {
         let src = r#"
 #SRV0:HTTP[port:8080, proto:on]

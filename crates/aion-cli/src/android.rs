@@ -484,6 +484,8 @@ fn generate_manifest(app_name: &str) -> String {
         r#"<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:label="{safe_name}"
@@ -508,6 +510,18 @@ fn generate_main_activity_java(package_name: &str) -> String {
         r##"package {package_name};
 
 import android.app.Activity;
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.content.pm.PackageManager;
+import android.graphics.Canvas;
+import android.graphics.Paint;
+import android.graphics.RectF;
+import android.media.AudioManager;
+import android.media.ToneGenerator;
+import android.os.Build;
+import android.os.Vibrator;
+import java.util.UUID;
 import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.graphics.Typeface;
@@ -573,6 +587,8 @@ public class MainActivity extends Activity {{
     private float currentScale = 1f;
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private final List<View> shapeViews = new ArrayList<>();
+    private boolean ticking = false;
 
     private static class TextBinding {{
         final TextView view;
@@ -635,6 +651,7 @@ public class MainActivity extends Activity {{
                     runNodeEvent(k, "init", null, -1);
                 }}
             }}
+            startTicks();
         }} catch (Exception e) {{
             TextView err = new TextView(this);
             err.setText("AION runtime error: " + e.getMessage());
@@ -735,6 +752,19 @@ public class MainActivity extends Activity {{
                     @Override public void onNothingSelected(AdapterView<?> parent) {{}}
                 }});
                 view = spinner;
+            }} else if ("PROG".equals(widget) || "RING".equals(widget)) {{
+                boolean isRing = "RING".equals(widget);
+                ShapeView sh = isRing
+                    ? new ShapeView(true, getStringArg(args, 4, null),
+                        parseColorSafe(getStringArg(args, 2, "#E2E8F0"), Color.LTGRAY),
+                        parseColorSafe(getStringArg(args, 3, "#2563EB"), Color.BLUE),
+                        getFloatArg(args, 1, 10f) * scale, 0f)
+                    : new ShapeView(false, getStringArg(args, 5, null),
+                        parseColorSafe(getStringArg(args, 3, "#E2E8F0"), Color.LTGRAY),
+                        parseColorSafe(getStringArg(args, 4, "#2563EB"), Color.BLUE),
+                        0f, getFloatArg(args, 2, 6f) * scale);
+                shapeViews.add(sh);
+                view = sh;
             }} else if ("TXT".equals(widget)) {{
                 TextView txt = new TextView(this);
                 float fontSize = getFloatArg(args, 0, 16f);
@@ -783,6 +813,9 @@ public class MainActivity extends Activity {{
                     boxView.setBackgroundColor(parseColorSafe(getStringArg(args, 4, "#F8FAFC"), Color.WHITE));
                 }} else if ("NAV".equals(widget)) {{
                     boxView.setBackgroundColor(parseColorSafe(getStringArg(args, 2, "#0F172A"), Color.DKGRAY));
+                }} else if ("MODAL".equals(widget)) {{
+                    boxView.setBackgroundColor(Color.argb(140, 15, 23, 42));
+                    boxView.setClickable(true);
                 }}
                 view = boxView;
             }}
@@ -917,6 +950,15 @@ public class MainActivity extends Activity {{
     }}
 
     private boolean isNodeVisible(String id) {{
+        String mc = id;
+        while (mc != null) {{
+            JSONObject mu = nodeMap.get(mc);
+            if (mu != null && "MODAL".equals(mu.optString("widget"))) {{
+                String ms = getStringArg(mu.optJSONArray("args"), 0, null);
+                if (ms != null && !truthy(signals.get(ms))) return false;
+            }}
+            mc = parentMap.get(mc);
+        }}
         String cur = id;
         while (cur != null) {{
             String p = parentMap.get(cur);
@@ -975,6 +1017,8 @@ public class MainActivity extends Activity {{
             if (handler == null || !eventName.equals(handler.optString("event"))) continue;
             JSONObject hAct = handler.optJSONObject("action");
             if (hAct == null) continue;
+            JSONObject guardExpr = handler.optJSONObject("guard");
+            if (guardExpr != null && !truthy(evalExpr(guardExpr, null, itemCtx, indexCtx))) continue;
             runSingleAction(events, hAct, itemCtx, indexCtx);
         }}
     }}
@@ -990,6 +1034,34 @@ public class MainActivity extends Activity {{
                 if (fk != null) {{
                     String target = fk.optString("value", null);
                     if (target != null) navigateTo(target);
+                }}
+                return;
+            }}
+            if ("BEEP".equals(gName)) {{
+                aionBeep();
+                return;
+            }}
+            if ("NOTIFY".equals(gName) && gArgs != null && gArgs.length() >= 2) {{
+                Object t = evalExpr(gArgs.optJSONObject(0), null, itemCtx, indexCtx);
+                Object b = evalExpr(gArgs.optJSONObject(1), null, itemCtx, indexCtx);
+                aionNotify(t == null ? "" : String.valueOf(t), b == null ? "" : String.valueOf(b));
+                return;
+            }}
+            if ("SETAT".equals(gName) && gArgs != null && gArgs.length() >= 3) {{
+                JSONObject a0 = gArgs.optJSONObject(0);
+                JSONObject k0 = a0 != null ? a0.optJSONObject("kind") : null;
+                String sigId = k0 != null ? k0.optString("value", null) : null;
+                int at = (int) toNum(evalExpr(gArgs.optJSONObject(1), null, itemCtx, indexCtx));
+                Object val = evalExpr(gArgs.optJSONObject(2), null, itemCtx, indexCtx);
+                if (sigId != null && signals.get(sigId) instanceof JSONArray) {{
+                    JSONArray cur = (JSONArray) signals.get(sigId);
+                    if (at >= 0 && at < cur.length()) {{
+                        JSONArray next = new JSONArray();
+                        for (int i = 0; i < cur.length(); i++) next.put(i == at ? val : cur.opt(i));
+                        signals.put(sigId, next);
+                        savePersistedSignals();
+                        updateTexts();
+                    }}
                 }}
                 return;
             }}
@@ -1146,6 +1218,15 @@ public class MainActivity extends Activity {{
             }}
             return out;
         }}
+        if ("call".equals(k)) {{
+            JSONObject cv = kind.optJSONObject("value");
+            JSONObject callee = cv != null ? cv.optJSONObject("callee") : null;
+            JSONObject ck = callee != null ? callee.optJSONObject("kind") : null;
+            String cn = ck != null ? ck.optString("value") : "";
+            if ("UID".equals(cn)) return UUID.randomUUID().toString();
+            if ("NOW".equals(cn)) return (double) System.currentTimeMillis();
+            return null;
+        }}
         if ("binary".equals(k)) {{
             JSONObject v = kind.optJSONObject("value");
             if (v == null) return null;
@@ -1156,16 +1237,18 @@ public class MainActivity extends Activity {{
             switch (op) {{
                 case "Add":
                     if (l instanceof String || r instanceof String) return String.valueOf(l == null ? "" : l) + String.valueOf(r == null ? "" : r);
-                    return ln + rn;
-                case "Sub": return ln - rn;
-                case "Mul": return ln * rn;
-                case "Div": return rn != 0 ? ln / rn : 0.0;
-                case "Eq": return String.valueOf(l).equals(String.valueOf(r));
-                case "Ne": return !String.valueOf(l).equals(String.valueOf(r));
+                    return numOut(ln + rn, l, r);
+                case "Sub": return numOut(ln - rn, l, r);
+                case "Mul": return numOut(ln * rn, l, r);
+                case "Div": return rn != 0 ? numOut(ln / rn, l, r) : (Object) Integer.valueOf(0);
+                case "Eq": return (l instanceof Number && r instanceof Number) ? ln == rn : String.valueOf(l).equals(String.valueOf(r));
+                case "Ne": return (l instanceof Number && r instanceof Number) ? ln != rn : !String.valueOf(l).equals(String.valueOf(r));
                 case "Lt": return ln < rn;
                 case "Le": return ln <= rn;
                 case "Gt": return ln > rn;
                 case "Ge": return ln >= rn;
+                case "And": return truthy(l) && truthy(r);
+                case "Or": return truthy(l) || truthy(r);
                 default: return null;
             }}
         }}
@@ -1177,7 +1260,128 @@ public class MainActivity extends Activity {{
         try {{ return Double.parseDouble(String.valueOf(o)); }} catch (Exception e) {{ return 0.0; }}
     }}
 
+    private static Object numOut(double d, Object l, Object r) {{
+        boolean li = (l instanceof Integer || l instanceof Long);
+        boolean ri = (r instanceof Integer || r instanceof Long);
+        if (li && ri && d == Math.rint(d) && Math.abs(d) < 2147483647.0) return (int) d;
+        return d;
+    }}
+
+    private static boolean truthy(Object v) {{
+        if (v == null) return false;
+        if (v instanceof Boolean) return (Boolean) v;
+        if (v instanceof Number) return ((Number) v).doubleValue() != 0.0;
+        String s = String.valueOf(v);
+        return !(s.isEmpty() || "false".equals(s) || "null".equals(s));
+    }}
+
+    private class ShapeView extends View {{
+        final boolean ring;
+        final String sigId;
+        final int track, fill;
+        final float thick, radius;
+        final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+
+        ShapeView(boolean ring, String sigId, int track, int fill, float thick, float radius) {{
+            super(MainActivity.this);
+            this.ring = ring;
+            this.sigId = sigId;
+            this.track = track;
+            this.fill = fill;
+            this.thick = thick;
+            this.radius = radius;
+        }}
+
+        @Override
+        protected void onDraw(Canvas c) {{
+            float pct = (float) Math.max(0.0, Math.min(100.0, toNum(sigId == null ? 0 : signals.get(sigId))));
+            float w = getWidth(), h = getHeight();
+            if (ring) {{
+                float t = Math.max(1f, thick);
+                paint.setStyle(Paint.Style.STROKE);
+                paint.setStrokeWidth(t);
+                RectF r = new RectF(t / 2f, t / 2f, w - t / 2f, h - t / 2f);
+                paint.setColor(track);
+                c.drawArc(r, 0f, 360f, false, paint);
+                paint.setColor(fill);
+                c.drawArc(r, -90f, 360f * pct / 100f, false, paint);
+            }} else {{
+                paint.setStyle(Paint.Style.FILL);
+                paint.setColor(track);
+                c.drawRoundRect(new RectF(0f, 0f, w, h), radius, radius, paint);
+                paint.setColor(fill);
+                c.drawRoundRect(new RectF(0f, 0f, w * pct / 100f, h), radius, radius, paint);
+            }}
+        }}
+    }}
+
+    private void aionBeep() {{
+        try {{
+            ToneGenerator tg = new ToneGenerator(AudioManager.STREAM_ALARM, 100);
+            tg.startTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, 1500);
+        }} catch (Exception ignored) {{}}
+        try {{
+            Vibrator vib = (Vibrator) getSystemService(VIBRATOR_SERVICE);
+            if (vib != null) vib.vibrate(600);
+        }} catch (Exception ignored) {{}}
+    }}
+
+    private void aionNotify(String title, String body) {{
+        try {{
+            if (Build.VERSION.SDK_INT >= 33
+                    && checkSelfPermission("android.permission.POST_NOTIFICATIONS") != PackageManager.PERMISSION_GRANTED) {{
+                requestPermissions(new String[]{{"android.permission.POST_NOTIFICATIONS"}}, 77);
+                Toast.makeText(this, title + (body.isEmpty() ? "" : ": " + body), Toast.LENGTH_LONG).show();
+                return;
+            }}
+            NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+            Notification.Builder nb;
+            if (Build.VERSION.SDK_INT >= 26) {{
+                nm.createNotificationChannel(new NotificationChannel("aion_alerts", "AION", NotificationManager.IMPORTANCE_HIGH));
+                nb = new Notification.Builder(this, "aion_alerts");
+            }} else {{
+                nb = new Notification.Builder(this);
+            }}
+            nb.setSmallIcon(android.R.drawable.ic_dialog_info).setContentTitle(title).setContentText(body).setAutoCancel(true);
+            nm.notify((int) (System.currentTimeMillis() % Integer.MAX_VALUE), nb.build());
+        }} catch (Exception e) {{
+            Toast.makeText(this, title + (body.isEmpty() ? "" : ": " + body), Toast.LENGTH_LONG).show();
+        }}
+    }}
+
+    private void startTicks() {{
+        for (Map.Entry<String, JSONObject> entry : nodeMap.entrySet()) {{
+            JSONObject ui = entry.getValue();
+            if (!"ui".equals(ui.optString("node_type"))) continue;
+            JSONArray evs = ui.optJSONArray("events");
+            if (evs == null) continue;
+            Set<String> seen = new HashSet<>();
+            for (int i = 0; i < evs.length(); i++) {{
+                JSONObject ev = evs.optJSONObject(i);
+                if (ev == null) continue;
+                String name = ev.optString("event");
+                if (!name.matches("tick\\d*") || !seen.add(name)) continue;
+                long ms = "tick".equals(name) ? 1000L : Math.max(50L, Long.parseLong(name.substring(4)));
+                Runnable r = new Runnable() {{
+                    @Override public void run() {{
+                        runNodeEvent(ui, name, null, -1);
+                        mainHandler.postDelayed(this, ms);
+                    }}
+                }};
+                mainHandler.postDelayed(r, ms);
+            }}
+        }}
+    }}
+
+    @Override
+    protected void onDestroy() {{
+        mainHandler.removeCallbacksAndMessages(null);
+        super.onDestroy();
+    }}
+
     private void updateTexts() {{
+        applyRouterVisibility();
+        for (View sv : shapeViews) sv.invalidate();
         for (TextBinding b : textBindings) {{
             b.view.setText(resolveText(b.template, null));
         }}

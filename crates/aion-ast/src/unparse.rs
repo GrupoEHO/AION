@@ -179,7 +179,13 @@ fn format_ui_arg(a: &UiArg) -> String {
 }
 
 fn format_event_handler(ev: &EventHandler, out: &mut String) {
-    let _ = write!(out, "@{}->", ev.event);
+    let _ = write!(out, "@{}", ev.event);
+    if let Some(g) = &ev.guard {
+        out.push_str(" if ");
+        format_expr(g, out);
+        out.push(' ');
+    }
+    out.push_str("->");
     match &ev.action {
         EventAction::Call { api, payload, bind } => {
             let _ = write!(out, "CALL({api},");

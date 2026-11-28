@@ -1,0 +1,83 @@
+// Countdown timer (100% local, no backend):
+//  - @tick (1s) with `if` guards drives the countdown
+//  - RING progress, MODAL alarm dialog, BEEP + NOTIFY when time is up
+//  - h:m:s picker with SEL, presets list: select / edit (SETAT) / delete (REMOVE), unique ids with UID()
+#M_Preset:Preset{id:str, name:str, secs:i32}
+
+#S_presets:list<#M_Preset> = [{id:"p1", name:"Pomodoro", secs:1500}, {id:"p2", name:"Descanso", secs:300}]
+#S_selected:i32 = 0
+#S_total:i32 = 1500
+#S_left:i32 = 1500
+#S_running:i32 = 0
+#S_pct:f64 = 100.0
+#S_alarm:bool = false
+#S_new_name:str = "Nuevo"
+#S_h:i32 = 0
+#S_m:i32 = 5
+#S_s:i32 = 0
+
+#N_root:ROOT[16,16,100%,100%,#F8FAFC]{#N_main,#N_modal}
+  @tick if #S_running == 1 && #S_left > 0 ->#S_left=#S_left-1
+  @tick if #S_running == 1 ->#S_pct=#S_left*100/#S_total
+  @tick if #S_running == 1 && #S_left == 0 ->BEEP()
+  @tick if #S_running == 1 && #S_left == 0 ->NOTIFY("Temporizador", "Tiempo terminado")
+  @tick if #S_running == 1 && #S_left == 0 ->#S_alarm=true
+  @tick if #S_running == 1 && #S_left == 0 ->#S_running=0
+
+#N_main:FLEX[v,s,c,12]{#N_title,#N_ring,#N_time,#N_controls,#N_picker,#N_add,#N_list}
+#N_title:TXT[22,700,#0F172A]{"Temporizador"}
+#N_ring:RING[160,14,#E2E8F0,#2563EB,#S_pct]
+#N_time:TXT[34,700,#0F172A]{"{#S_left} s"}
+
+#N_controls:FLEX[h,sb,c,8]{#N_btn_start,#N_btn_pause,#N_btn_reset}
+#N_btn_start:BTN[110,44,8,#16A34A]{#N_lbl_start}
+  @tap if #S_left == 0 ->#S_left=#S_total
+  @tap->#S_running=1
+#N_lbl_start:TXT[15,600,#FFFFFF]{"Iniciar"}
+#N_btn_pause:BTN[110,44,8,#F59E0B]{#N_lbl_pause} @tap->#S_running=0
+#N_lbl_pause:TXT[15,600,#FFFFFF]{"Pausa"}
+#N_btn_reset:BTN[110,44,8,#64748B]{#N_lbl_reset}
+  @tap->#S_running=0
+  @tap->#S_left=#S_total
+  @tap->#S_pct=100
+#N_lbl_reset:TXT[15,600,#FFFFFF]{"Reiniciar"}
+
+#N_picker:FLEX[h,sb,c,6]{#N_sel_h,#N_sel_m,#N_sel_s,#N_btn_apply}
+#N_sel_h:SEL[70,44,8,#FFFFFF,#S_h]{"0|0 h","1|1 h","2|2 h","3|3 h"}
+#N_sel_m:SEL[70,44,8,#FFFFFF,#S_m]{"0|0 m","1|1 m","5|5 m","10|10 m","15|15 m","25|25 m","30|30 m","45|45 m"}
+#N_sel_s:SEL[70,44,8,#FFFFFF,#S_s]{"0|0 s","15|15 s","30|30 s","45|45 s"}
+#N_btn_apply:BTN[110,44,8,#2563EB]{#N_lbl_apply}
+  @tap->#S_total=#S_h*3600+#S_m*60+#S_s
+  @tap->#S_left=#S_total
+  @tap->#S_pct=100
+  @tap->#S_running=0
+#N_lbl_apply:TXT[14,600,#FFFFFF]{"Aplicar"}
+
+#N_add:FLEX[h,sb,c,8]{#N_inp_name,#N_btn_add}
+#N_inp_name:INP[200,44,8,#FFFFFF,#S_new_name]{"Nombre del preset"}
+#N_btn_add:BTN[140,44,8,#16A34A]{#N_lbl_add} @tap->PUSH(#S_presets,{id:UID(), name:#S_new_name, secs:#S_h*3600+#S_m*60+#S_s})
+#N_lbl_add:TXT[14,600,#FFFFFF]{"+ Preset"}
+
+#N_list:LIST[v,8,#S_presets]{#N_row}
+#N_row:FLEX[h,sb,c,8]{#N_row_pick,#N_row_edit,#N_row_del}
+#N_row_pick:BTN[190,36,8,#E0E7FF]{#N_row_pick_txt}
+  @tap->#S_selected=index
+  @tap->#S_total=item.secs
+  @tap->#S_left=item.secs
+  @tap->#S_pct=100
+  @tap->#S_running=0
+#N_row_pick_txt:TXT[12,600,#1E293B]{"{item.name} {item.secs}s"}
+#N_row_edit:BTN[64,36,8,#F59E0B]{#N_row_edit_txt} @tap->SETAT(#S_presets,index,{id:item.id, name:item.name, secs:#S_h*3600+#S_m*60+#S_s})
+#N_row_edit_txt:TXT[13,600,#FFFFFF]{"Editar"}
+#N_row_del:BTN[64,36,8,#DC2626]{#N_row_del_txt} @tap->REMOVE(#S_presets,index)
+#N_row_del_txt:TXT[13,600,#FFFFFF]{"Borrar"}
+
+#N_modal:MODAL[#S_alarm]{#N_dialog}
+#N_dialog:ROOT[16,16,300,170,#FFFFFF]{#N_dlg_title,#N_dlg_msg,#N_dlg_btn}
+#N_dlg_title:TXT[20,700,#0F172A]{"Tiempo terminado"}
+#N_dlg_msg:TXT[14,400,#475569]{"El temporizador llegó a 0."}
+#N_dlg_btn:BTN[120,40,8,#2563EB]{#N_dlg_ok}
+  @tap->#S_alarm=false
+  @tap->#S_left=#S_total
+  @tap->#S_pct=100
+#N_dlg_ok:TXT[14,600,#FFFFFF]{"Aceptar"}

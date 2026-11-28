@@ -480,8 +480,12 @@ fn call_tool(
                     "TXT": "TXT[font_size, weight, #COLOR_HEX]{\"Text {#S0} or {item.field}\"}",
                     "INP": "INP[width, height, radius, #BG_HEX, #S_bound]{\"Placeholder\"}",
                     "SEL": "SEL[width, height, radius, #BG_HEX, #S_bound]{\"MXN|Peso\", \"USD|Dolar\"} @change->#S_total=#S_monto*#S_tasa (native dropdown; options are \"value\" or \"value|label\")",
-                    "BTN": "BTN[width, height, radius, #BG_HEX]{#N_lbl} @tap->PUSH(#S_items,{...}) | REMOVE(#S_items,index) | CALL(#API0,{...})=>#S0=res.f @err->TOAST(\"Error\")"
+                    "PROG": "PROG[width, height, radius, #TRACK_HEX, #FILL_HEX, #S_pct] (linear progress bar, 0..100)",
+                    "RING": "RING[size, thickness, #TRACK_HEX, #FILL_HEX, #S_pct] (circular progress ring, 0..100)",
+                    "MODAL": "MODAL[#S_open]{#N_dialog} (full-screen dialog overlay visible while #S_open is truthy)",
+                    "BTN": "BTN[width, height, radius, #BG_HEX]{#N_lbl} @tap if <cond> -> PUSH | SETAT | REMOVE | BEEP() | NOTIFY(title,body) | CALL(#API0,{...})=>#S0=res.f @err->TOAST(\"Error\")"
                 },
+                "events": ["@tap", "@change", "@init", "@tick (1000ms) / @tick<ms> (e.g. @tick500)", "@loading", "@err", "optional guard: @event if <expr> -> <action>", "builtins: UID(), NOW()"],
                 "rules": [
                     "Flat graph only (zero nesting). Semantic IDs (#N_home, #S_budget, #M_Expense, #API_save) are recommended.",
                     "Never spin up multiple #SRV servers for multiple screens; use one #SRV0 + ROUTER + @tap->NAV(#N_screen).",

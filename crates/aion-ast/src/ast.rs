@@ -284,6 +284,9 @@ pub enum UiBody {
 pub struct EventHandler {
     pub event: String,
     pub action: EventAction,
+    /// Optional `if <expr>` guard evaluated before running the action.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guard: Option<Expr>,
     pub span: Span,
 }
 

@@ -536,6 +536,52 @@ fn ui_node_to_style(ui: &UiNode, signals: Option<&SignalStore>) -> (Style, bool)
             };
             (style, false)
         }
+        "PROG" => {
+            // PROG[width, height, radius, #track, #fill, #S_pct]  (pct 0..100)
+            let width = arg_as_dim(ui.args.first()).unwrap_or_else(|| length(200.0_f32));
+            let height = arg_as_dim(ui.args.get(1)).unwrap_or_else(|| length(10.0_f32));
+            let style = Style {
+                flex_shrink: 0.0,
+                size: Size { width, height },
+                ..Default::default()
+            };
+            (style, false)
+        }
+        "RING" => {
+            // RING[size, thickness, #track, #fill, #S_pct]  (pct 0..100)
+            let size = arg_as_f32(ui.args.first()).unwrap_or(120.0);
+            let style = Style {
+                flex_shrink: 0.0,
+                size: Size {
+                    width: length(size),
+                    height: length(size),
+                },
+                ..Default::default()
+            };
+            (style, false)
+        }
+        "MODAL" => {
+            // MODAL[#S_open]{#N_content...}: full-screen overlay shown while `#S_open` is truthy.
+            let style = Style {
+                display: Display::Flex,
+                flex_direction: FlexDirection::Column,
+                justify_content: Some(JustifyContent::Center),
+                align_items: Some(AlignItems::Center),
+                position: Position::Absolute,
+                inset: Rect {
+                    left: length(0.0_f32),
+                    right: length(0.0_f32),
+                    top: length(0.0_f32),
+                    bottom: length(0.0_f32),
+                },
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: percent(1.0_f32),
+                },
+                ..Default::default()
+            };
+            (style, false)
+        }
         _ => {
             let width = arg_as_dim(ui.args.first()).unwrap_or_else(auto);
             let height = arg_as_dim(ui.args.get(1)).unwrap_or_else(auto);

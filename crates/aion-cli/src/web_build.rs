@@ -405,6 +405,12 @@ fn generate_wasm_index_html(app_name: &str) -> String {
 
     function isNodeVisible(id, nodeMap, parentMap) {{
       if (isInsideDynamicListTemplate(id, nodeMap, parentMap)) return false;
+      let mc = id;
+      while (mc) {{
+        const mu = nodeMap[mc];
+        if (mu?.widget === 'MODAL' && !truthy(sigVal(mu.args?.[0]?.value))) return false;
+        mc = parentMap[mc];
+      }}
       let cur = id;
       while (cur) {{
         const p = parentMap[cur];
@@ -431,6 +437,56 @@ fn generate_wasm_index_html(app_name: &str) -> String {
         }}
       }}
       return false;
+    }}
+
+    function truthy(v) {{ return !(v === false || v === null || v === undefined || v === 0 || v === '' || v === 'false'); }}
+    function clampPct(v) {{ const n = Number(v) || 0; return Math.max(0, Math.min(100, n)); }}
+    const sigVal = (id) => (typeof wasmApp !== 'undefined' && wasmApp) ? currentSignals()[id] : signals[id];
+
+    function aionBeep() {{
+      try {{
+        const C = window.AudioContext || window.webkitAudioContext;
+        const ctx = new C();
+        [0, 0.25, 0.5].forEach(t => {{
+          const o = ctx.createOscillator();
+          const g = ctx.createGain();
+          o.type = 'square';
+          o.frequency.value = 880;
+          g.gain.value = 0.15;
+          o.connect(g); g.connect(ctx.destination);
+          o.start(ctx.currentTime + t);
+          o.stop(ctx.currentTime + t + 0.16);
+        }});
+      }} catch (_) {{}}
+      try {{ if (navigator.vibrate) navigator.vibrate([200, 100, 200]); }} catch (_) {{}}
+    }}
+
+    function aionNotify(title, body) {{
+      const fallback = () => showToast(title + (body ? ': ' + body : ''));
+      try {{
+        if (!('Notification' in window)) return fallback();
+        if (Notification.permission === 'granted') {{ new Notification(title, {{ body }}); }}
+        else if (Notification.permission !== 'denied') {{
+          Notification.requestPermission().then(p => {{ if (p === 'granted') new Notification(title, {{ body }}); else fallback(); }});
+        }} else fallback();
+      }} catch (_) {{ fallback(); }}
+    }}
+
+    function startTicks() {{
+      (window.__aionTimers || []).forEach(clearInterval);
+      window.__aionTimers = [];
+      for (const n of bundle.program.nodes) {{
+        const ui = n.kind;
+        if (ui?.node_type !== 'ui') continue;
+        const evs = new Set((ui.events || []).map(e => e.event).filter(e => /^tick\d*$/.test(e)));
+        for (const evName of evs) {{
+          const ms = evName === 'tick' ? 1000 : Math.max(50, parseInt(evName.slice(4), 10) || 1000);
+          window.__aionTimers.push(setInterval(async () => {{
+            window.__aionTicking = true;
+            try {{ await runNodeEvent(ui, evName, null); }} finally {{ window.__aionTicking = false; }}
+          }}, ms));
+        }}
+      }}
     }}
 
     function showToast(msg) {{
@@ -477,6 +533,12 @@ fn generate_wasm_index_html(app_name: &str) -> String {
         return obj;
       }}
       if (k === 'list') return (v || []).map(x => evalExpr(x, resObj, signals, itemCtx));
+      if (k === 'call') {{
+        const cn = v.callee?.kind?.value;
+        if (cn === 'UID') return 'id' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+        if (cn === 'NOW') return Date.now();
+        return null;
+      }}
       if (k === 'binary') {{
         const l = evalExpr(v.left, resObj, signals, itemCtx);
         const r = evalExpr(v.right, resObj, signals, itemCtx);
@@ -512,6 +574,7 @@ fn generate_wasm_index_html(app_name: &str) -> String {
 
       for (const handler of handlers) {{
         const signals = currentSignals();
+        if (handler.guard && !truthy(evalExpr(handler.guard, null, signals, itemCtx))) continue;
         const act = handler.action;
         if (act.action_kind === 'generic') {{
           if (act.name === 'NAV') {{
@@ -520,6 +583,23 @@ fn generate_wasm_index_html(app_name: &str) -> String {
               savePersisted();
               navigateTo(target);
               needsRender = false;
+            }}
+            continue;
+          }}
+          if (act.name === 'BEEP') {{ aionBeep(); continue; }}
+          if (act.name === 'NOTIFY') {{
+            aionNotify(String(evalExpr(act.args?.[0], null, signals, itemCtx) ?? ''), String(evalExpr(act.args?.[1], null, signals, itemCtx) ?? ''));
+            continue;
+          }}
+          if (act.name === 'SETAT') {{
+            const sigId = act.args?.[0]?.kind?.value;
+            const idx = Number(evalExpr(act.args?.[1], null, signals, itemCtx));
+            const val = evalExpr(act.args?.[2], null, signals, itemCtx);
+            if (sigId && Array.isArray(signals[sigId]) && idx >= 0 && idx < signals[sigId].length) {{
+              const cur = [...signals[sigId]];
+              cur[idx] = val;
+              wasmApp.set_signal(sigId, JSON.stringify(cur));
+              needsRender = true;
             }}
             continue;
           }}
@@ -640,6 +720,11 @@ fn generate_wasm_index_html(app_name: &str) -> String {
     }}
 
     function renderStage() {{
+      if (window.__aionTicking && ['INPUT', 'SELECT'].includes(document.activeElement?.tagName)) {{
+        if (typeof updateSignalsUI === 'function') updateSignalsUI();
+        else if (typeof refreshTexts === 'function') refreshTexts();
+        return;
+      }}
       const stage = document.getElementById('stage');
       const w = Math.max(320, window.innerWidth);
       const h = Math.max(480, window.innerHeight);
@@ -711,6 +796,32 @@ fn generate_wasm_index_html(app_name: &str) -> String {
             await runNodeEvent(ui, 'tap', null);
             renderStage();
           }});
+        }} else if (ui.widget === 'PROG') {{
+          el = document.createElement('div');
+          el.className = 'aion-node';
+          el.style.pointerEvents = 'none';
+          el.style.overflow = 'hidden';
+          el.style.borderRadius = (ui.args[2]?.value ?? 6) + 'px';
+          el.style.background = ui.args[3]?.value ?? '#E2E8F0';
+          const fill = document.createElement('div');
+          fill.style.height = '100%';
+          fill.style.width = clampPct(sigVal(ui.args[5]?.value)) + '%';
+          fill.style.background = ui.args[4]?.value ?? '#2563EB';
+          fill.style.transition = 'width .4s linear';
+          el.appendChild(fill);
+        }} else if (ui.widget === 'RING') {{
+          el = document.createElement('div');
+          el.className = 'aion-node';
+          el.style.pointerEvents = 'none';
+          el.style.borderRadius = '50%';
+          const thick = ui.args[1]?.value ?? 10;
+          const track = ui.args[2]?.value ?? '#E2E8F0';
+          const fillC = ui.args[3]?.value ?? '#2563EB';
+          const pct = clampPct(sigVal(ui.args[4]?.value));
+          el.style.background = 'conic-gradient(' + fillC + ' ' + (pct * 3.6) + 'deg, ' + track + ' 0)';
+          const mask = 'radial-gradient(farthest-side, transparent calc(100% - ' + thick + 'px), #000 calc(100% - ' + thick + 'px))';
+          el.style.webkitMask = mask;
+          el.style.mask = mask;
         }} else if (ui.widget === 'TXT') {{
           el = document.createElement('span');
           el.className = 'aion-node aion-txt';
@@ -725,7 +836,8 @@ fn generate_wasm_index_html(app_name: &str) -> String {
           el = document.createElement('div');
           el.className = 'aion-node';
           const isScrollFlex = ui.widget === 'FLEX' && (ui.args || []).some(a => a.value === 'scroll');
-          el.style.pointerEvents = (ui.widget === 'LIST' || isScrollFlex) ? 'auto' : 'none';
+          el.style.pointerEvents = (ui.widget === 'LIST' || ui.widget === 'MODAL' || isScrollFlex) ? 'auto' : 'none';
+          if (ui.widget === 'MODAL') el.style.background = 'rgba(15,23,42,.55)';
           if (isScrollFlex) el.style.overflow = 'auto';
           if (ui.widget === 'ROOT' && ui.args[4]?.value) el.style.background = ui.args[4].value;
           if (ui.widget === 'NAV' && ui.args[2]?.value) el.style.background = ui.args[2].value;
@@ -768,6 +880,7 @@ fn generate_wasm_index_html(app_name: &str) -> String {
       for (const n of bundle.program.nodes) {{
         if (n.kind?.node_type === 'ui') runNodeEvent(n.kind, 'init', null);
       }}
+      startTicks();
       window.addEventListener('resize', renderStage);
     }})();
   </script>
@@ -902,6 +1015,12 @@ fn generate_prod_index_html(app_name: &str) -> String {
 
     function isNodeVisible(id, nodeMap, parentMap) {{
       if (isInsideDynamicListTemplate(id, nodeMap, parentMap)) return false;
+      let mc = id;
+      while (mc) {{
+        const mu = nodeMap[mc];
+        if (mu?.widget === 'MODAL' && !truthy(sigVal(mu.args?.[0]?.value))) return false;
+        mc = parentMap[mc];
+      }}
       let cur = id;
       while (cur) {{
         const p = parentMap[cur];
@@ -928,6 +1047,56 @@ fn generate_prod_index_html(app_name: &str) -> String {
         }}
       }}
       return false;
+    }}
+
+    function truthy(v) {{ return !(v === false || v === null || v === undefined || v === 0 || v === '' || v === 'false'); }}
+    function clampPct(v) {{ const n = Number(v) || 0; return Math.max(0, Math.min(100, n)); }}
+    const sigVal = (id) => (typeof wasmApp !== 'undefined' && wasmApp) ? currentSignals()[id] : signals[id];
+
+    function aionBeep() {{
+      try {{
+        const C = window.AudioContext || window.webkitAudioContext;
+        const ctx = new C();
+        [0, 0.25, 0.5].forEach(t => {{
+          const o = ctx.createOscillator();
+          const g = ctx.createGain();
+          o.type = 'square';
+          o.frequency.value = 880;
+          g.gain.value = 0.15;
+          o.connect(g); g.connect(ctx.destination);
+          o.start(ctx.currentTime + t);
+          o.stop(ctx.currentTime + t + 0.16);
+        }});
+      }} catch (_) {{}}
+      try {{ if (navigator.vibrate) navigator.vibrate([200, 100, 200]); }} catch (_) {{}}
+    }}
+
+    function aionNotify(title, body) {{
+      const fallback = () => showToast(title + (body ? ': ' + body : ''));
+      try {{
+        if (!('Notification' in window)) return fallback();
+        if (Notification.permission === 'granted') {{ new Notification(title, {{ body }}); }}
+        else if (Notification.permission !== 'denied') {{
+          Notification.requestPermission().then(p => {{ if (p === 'granted') new Notification(title, {{ body }}); else fallback(); }});
+        }} else fallback();
+      }} catch (_) {{ fallback(); }}
+    }}
+
+    function startTicks() {{
+      (window.__aionTimers || []).forEach(clearInterval);
+      window.__aionTimers = [];
+      for (const n of bundle.program.nodes) {{
+        const ui = n.kind;
+        if (ui?.node_type !== 'ui') continue;
+        const evs = new Set((ui.events || []).map(e => e.event).filter(e => /^tick\d*$/.test(e)));
+        for (const evName of evs) {{
+          const ms = evName === 'tick' ? 1000 : Math.max(50, parseInt(evName.slice(4), 10) || 1000);
+          window.__aionTimers.push(setInterval(async () => {{
+            window.__aionTicking = true;
+            try {{ await runNodeEvent(ui, evName, null); }} finally {{ window.__aionTicking = false; }}
+          }}, ms));
+        }}
+      }}
     }}
 
     function showToast(msg) {{
@@ -977,6 +1146,12 @@ fn generate_prod_index_html(app_name: &str) -> String {
         return obj;
       }}
       if (k === 'list') return (v || []).map(x => evalExpr(x, resObj, itemCtx));
+      if (k === 'call') {{
+        const cn = v.callee?.kind?.value;
+        if (cn === 'UID') return 'id' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+        if (cn === 'NOW') return Date.now();
+        return null;
+      }}
       if (k === 'binary') {{
         const l = evalExpr(v.left, resObj, itemCtx);
         const r = evalExpr(v.right, resObj, itemCtx);
@@ -1010,6 +1185,7 @@ fn generate_prod_index_html(app_name: &str) -> String {
       let needsRender = false;
 
       for (const handler of handlers) {{
+        if (handler.guard && !truthy(evalExpr(handler.guard, null, itemCtx))) continue;
         const act = handler.action;
         if (act.action_kind === 'generic') {{
           if (act.name === 'NAV') {{
@@ -1018,6 +1194,23 @@ fn generate_prod_index_html(app_name: &str) -> String {
               savePersisted();
               navigateTo(target);
               needsRender = false;
+            }}
+            continue;
+          }}
+          if (act.name === 'BEEP') {{ aionBeep(); continue; }}
+          if (act.name === 'NOTIFY') {{
+            aionNotify(String(evalExpr(act.args?.[0], null, itemCtx) ?? ''), String(evalExpr(act.args?.[1], null, itemCtx) ?? ''));
+            continue;
+          }}
+          if (act.name === 'SETAT') {{
+            const sigId = act.args?.[0]?.kind?.value;
+            const idx = Number(evalExpr(act.args?.[1], null, itemCtx));
+            const val = evalExpr(act.args?.[2], null, itemCtx);
+            if (sigId && Array.isArray(signals[sigId]) && idx >= 0 && idx < signals[sigId].length) {{
+              const cur = [...signals[sigId]];
+              cur[idx] = val;
+              signals[sigId] = cur;
+              needsRender = true;
             }}
             continue;
           }}
@@ -1136,6 +1329,11 @@ fn generate_prod_index_html(app_name: &str) -> String {
     }}
 
     function renderStage() {{
+      if (window.__aionTicking && ['INPUT', 'SELECT'].includes(document.activeElement?.tagName)) {{
+        if (typeof updateSignalsUI === 'function') updateSignalsUI();
+        else if (typeof refreshTexts === 'function') refreshTexts();
+        return;
+      }}
       const stage = document.getElementById('stage');
       const isDesktop = window.innerWidth >= 900;
       const layout = isDesktop ? bundle.layouts.desktop : bundle.layouts.mobile;
@@ -1205,6 +1403,32 @@ fn generate_prod_index_html(app_name: &str) -> String {
             await runNodeEvent(ui, 'tap', null);
             renderStage();
           }});
+        }} else if (ui.widget === 'PROG') {{
+          el = document.createElement('div');
+          el.className = 'aion-node';
+          el.style.pointerEvents = 'none';
+          el.style.overflow = 'hidden';
+          el.style.borderRadius = (ui.args[2]?.value ?? 6) + 'px';
+          el.style.background = ui.args[3]?.value ?? '#E2E8F0';
+          const fill = document.createElement('div');
+          fill.style.height = '100%';
+          fill.style.width = clampPct(sigVal(ui.args[5]?.value)) + '%';
+          fill.style.background = ui.args[4]?.value ?? '#2563EB';
+          fill.style.transition = 'width .4s linear';
+          el.appendChild(fill);
+        }} else if (ui.widget === 'RING') {{
+          el = document.createElement('div');
+          el.className = 'aion-node';
+          el.style.pointerEvents = 'none';
+          el.style.borderRadius = '50%';
+          const thick = ui.args[1]?.value ?? 10;
+          const track = ui.args[2]?.value ?? '#E2E8F0';
+          const fillC = ui.args[3]?.value ?? '#2563EB';
+          const pct = clampPct(sigVal(ui.args[4]?.value));
+          el.style.background = 'conic-gradient(' + fillC + ' ' + (pct * 3.6) + 'deg, ' + track + ' 0)';
+          const mask = 'radial-gradient(farthest-side, transparent calc(100% - ' + thick + 'px), #000 calc(100% - ' + thick + 'px))';
+          el.style.webkitMask = mask;
+          el.style.mask = mask;
         }} else if (ui.widget === 'TXT') {{
           el = document.createElement('span');
           el.className = 'aion-node aion-txt';
@@ -1219,7 +1443,8 @@ fn generate_prod_index_html(app_name: &str) -> String {
           el = document.createElement('div');
           el.className = 'aion-node';
           const isScrollFlex = ui.widget === 'FLEX' && (ui.args || []).some(a => a.value === 'scroll');
-          el.style.pointerEvents = (ui.widget === 'LIST' || isScrollFlex) ? 'auto' : 'none';
+          el.style.pointerEvents = (ui.widget === 'LIST' || ui.widget === 'MODAL' || isScrollFlex) ? 'auto' : 'none';
+          if (ui.widget === 'MODAL') el.style.background = 'rgba(15,23,42,.55)';
           if (isScrollFlex) el.style.overflow = 'auto';
           if (ui.widget === 'ROOT' && ui.args[4]?.value) el.style.background = ui.args[4].value;
           if (ui.widget === 'NAV' && ui.args[2]?.value) el.style.background = ui.args[2].value;
@@ -1261,6 +1486,7 @@ fn generate_prod_index_html(app_name: &str) -> String {
       for (const n of bundle.program.nodes) {{
         if (n.kind?.node_type === 'ui') runNodeEvent(n.kind, 'init', null);
       }}
+      startTicks();
       window.addEventListener('resize', renderStage);
     }})();
   </script>

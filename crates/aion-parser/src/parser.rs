@@ -670,12 +670,18 @@ pub fn program_parser<'a>(src: &'a str) -> impl Parser<Token, Program, Error = S
         )
         .map(|(name, args)| EventAction::Generic { name, args });
 
+    let event_guard = select! { Token::Ident(s) if s == "if" => () }
+        .ignore_then(expr_parser(src))
+        .or_not();
+
     let event_handler = select! { Token::AtIdent(ev) => ev }
+        .then(event_guard)
         .then_ignore(just(Token::Arrow))
         .then(choice((call_action, toast_action, set_action, generic_action)))
-        .map_with_span(move |(event, action), range| EventHandler {
+        .map_with_span(move |((event, guard), action), range| EventHandler {
             event,
             action,
+            guard,
             span: to_span(src, range),
         });
 

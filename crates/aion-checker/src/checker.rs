@@ -776,8 +776,14 @@ impl<'a> Checker<'a> {
                     UiBody::Empty | UiBody::Options(_) => {}
                 }
 
-                if matches!(ui.widget.as_str(), "INP" | "SEL" | "SELECT") {
-                    if let Some(UiArg::NodeRef(sig_id)) = ui.args.get(4) {
+                let bound_idx = match ui.widget.as_str() {
+                    "INP" | "SEL" | "SELECT" | "RING" => Some(4),
+                    "PROG" => Some(5),
+                    "MODAL" => Some(0),
+                    _ => None,
+                };
+                if let Some(bi) = bound_idx {
+                    if let Some(UiArg::NodeRef(sig_id)) = ui.args.get(bi) {
                         if !self.signals.contains_key(sig_id) {
                             self.diagnostics.push(
                                 Diagnostic::error(
@@ -802,6 +808,9 @@ impl<'a> Checker<'a> {
                 let has_err_handler = ui.events.iter().any(|h| h.event == "err");
 
                 for handler in &ui.events {
+                    if let Some(g) = &handler.guard {
+                        let _ = self.eval_expr(node.id.as_str(), g, &ui_locals, None);
+                    }
                     match &handler.action {
                         EventAction::Call { api, payload, bind } => {
                             if !has_err_handler {
@@ -1090,6 +1099,82 @@ impl<'a> Checker<'a> {
                             )
                             .with_node_id(node_id),
                         );
+                    }
+                }
+                let _ = self.eval_expr(node_id, &args[1], ui_locals, None);
+            }
+            "BEEP" => {}
+            "NOTIFY" => {
+                if args.len() != 2 {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            "E_ARG_COUNT",
+                            Phase::Checker,
+                            format!("`NOTIFY` in `{node_id}` expects 2 arguments `(title, body)`"),
+                            span,
+                        )
+                        .with_node_id(node_id)
+                        .with_expected("NOTIFY(\"Title\", \"Body\")"),
+                    );
+                }
+                for a in args {
+                    let _ = self.eval_expr(node_id, a, ui_locals, None);
+                }
+            }
+            "SETAT" => {
+                if args.len() != 3 {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            "E_ARG_COUNT",
+                            Phase::Checker,
+                            format!("`SETAT` in `{node_id}` expects 3 arguments `(#S_list, index, value)`"),
+                            span,
+                        )
+                        .with_node_id(node_id)
+                        .with_expected("SETAT(#S_list, index, value)"),
+                    );
+                    return;
+                }
+                if let ExprKind::NodeRef(sig_id) = &args[0].kind {
+                    match self.signals.get(sig_id).copied() {
+                        Some((sig, _)) => match &sig.ty {
+                            AionType::List(elem_ty) => {
+                                if !self.check_expr_compatible(node_id, &args[2], elem_ty, ui_locals) {
+                                    let actual = self.eval_expr(node_id, &args[2], ui_locals, None);
+                                    if actual != AionType::Unknown && !actual.is_assignable_to(elem_ty) {
+                                        self.diagnostics.push(
+                                            Diagnostic::error(
+                                                "E_TYPE_MISMATCH",
+                                                Phase::Checker,
+                                                format!("`SETAT({sig_id}, ...)` expects `{elem_ty}`, found `{actual}`"),
+                                                args[2].span,
+                                            )
+                                            .with_node_id(node_id)
+                                            .with_expected(elem_ty.to_string())
+                                            .with_found(actual.to_string()),
+                                        );
+                                    }
+                                }
+                            }
+                            other => self.diagnostics.push(
+                                Diagnostic::error(
+                                    "E_TYPE_MISMATCH",
+                                    Phase::Checker,
+                                    format!("`SETAT` target `{sig_id}` must be `list<T>`, found `{other}`"),
+                                    args[0].span,
+                                )
+                                .with_node_id(node_id),
+                            ),
+                        },
+                        None => self.diagnostics.push(
+                            Diagnostic::error(
+                                "E_UNKNOWN_NODE",
+                                Phase::Checker,
+                                format!("`SETAT` in `{node_id}` references undefined signal `{sig_id}`"),
+                                args[0].span,
+                            )
+                            .with_node_id(node_id),
+                        ),
                     }
                 }
                 let _ = self.eval_expr(node_id, &args[1], ui_locals, None);
@@ -1474,6 +1559,13 @@ impl<'a> Checker<'a> {
                                 node_id, obj_name, field, args, expr.span, locals, api_ctx,
                             );
                         }
+                    }
+                }
+                if let ExprKind::Ident(fname) = &callee.kind {
+                    match fname.as_str() {
+                        "UID" => return AionType::Str,
+                        "NOW" => return AionType::F64,
+                        _ => {}
                     }
                 }
                 let _ = self.eval_expr(node_id, callee, locals, api_ctx);
