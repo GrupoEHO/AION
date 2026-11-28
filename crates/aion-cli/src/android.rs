@@ -540,9 +540,14 @@ import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.Spinner;
+import android.widget.Switch;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import java.util.Locale;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -752,6 +757,36 @@ public class MainActivity extends Activity {{
                     @Override public void onNothingSelected(AdapterView<?> parent) {{}}
                 }});
                 view = spinner;
+            }} else if ("SW".equals(widget) || "SWITCH".equals(widget)) {{
+                Switch sw = new Switch(this);
+                String boundSig = getStringArg(args, 4, null);
+                sw.setChecked(boundSig != null && truthy(signals.get(boundSig)));
+                sw.setOnCheckedChangeListener((btn, isChecked) -> {{
+                    if (boundSig != null) {{
+                        signals.put(boundSig, isChecked);
+                        savePersistedSignals();
+                    }}
+                    runNodeEvent(ui, "change", null, -1);
+                    runNodeEvent(ui, "tap", null, -1);
+                    updateTexts();
+                }});
+                view = sw;
+            }} else if ("IMG".equals(widget)) {{
+                ImageView iv = new ImageView(this);
+                iv.setScaleType("contain".equals(getStringArg(args, 3, "cover"))
+                    ? ImageView.ScaleType.FIT_CENTER : ImageView.ScaleType.CENTER_CROP);
+                iv.setBackgroundColor(Color.parseColor("#E2E8F0"));
+                JSONObject bVal = body != null ? body.optJSONObject("value") : null;
+                String rawUrl = bVal != null ? resolveText(bVal.optString("template", ""), null) : "";
+                if (!rawUrl.isEmpty()) {{
+                    executor.execute(() -> {{
+                        try (InputStream is = new URL(rawUrl).openStream()) {{
+                            Bitmap bmp = BitmapFactory.decodeStream(is);
+                            if (bmp != null) mainHandler.post(() -> iv.setImageBitmap(bmp));
+                        }} catch (Exception ignored) {{}}
+                    }});
+                }}
+                view = iv;
             }} else if ("PROG".equals(widget) || "RING".equals(widget)) {{
                 boolean isRing = "RING".equals(widget);
                 ShapeView sh = isRing
@@ -1223,8 +1258,43 @@ public class MainActivity extends Activity {{
             JSONObject callee = cv != null ? cv.optJSONObject("callee") : null;
             JSONObject ck = callee != null ? callee.optJSONObject("kind") : null;
             String cn = ck != null ? ck.optString("value") : "";
+            JSONArray cargs = cv != null ? cv.optJSONArray("args") : null;
             if ("UID".equals(cn)) return UUID.randomUUID().toString();
             if ("NOW".equals(cn)) return (double) System.currentTimeMillis();
+            if ("FMT_TIME".equals(cn)) {{
+                long s = Math.max(0L, (long) Math.floor(toNum(cargs != null ? evalExpr(cargs.optJSONObject(0), resObj, itemCtx, indexCtx) : 0)));
+                long h = s / 3600L, m = (s % 3600L) / 60L, r = s % 60L;
+                return h > 0 ? String.format(Locale.US, "%02d:%02d:%02d", h, m, r) : String.format(Locale.US, "%02d:%02d", m, r);
+            }}
+            if ("FMT_MONEY".equals(cn)) {{
+                double amt = toNum(cargs != null ? evalExpr(cargs.optJSONObject(0), resObj, itemCtx, indexCtx) : 0);
+                Object symO = (cargs != null && cargs.length() > 1) ? evalExpr(cargs.optJSONObject(1), resObj, itemCtx, indexCtx) : "$";
+                return String.valueOf(symO == null ? "$" : symO) + String.format(Locale.US, "%,.2f", amt);
+            }}
+            if ("SUM".equals(cn)) {{
+                Object arrO = cargs != null ? evalExpr(cargs.optJSONObject(0), resObj, itemCtx, indexCtx) : null;
+                Object fldO = (cargs != null && cargs.length() > 1) ? evalExpr(cargs.optJSONObject(1), resObj, itemCtx, indexCtx) : null;
+                String fld = fldO != null ? String.valueOf(fldO) : null;
+                double sum = 0.0;
+                if (arrO instanceof JSONArray) {{
+                    JSONArray ja = (JSONArray) arrO;
+                    for (int i = 0; i < ja.length(); i++) {{
+                        Object el = ja.opt(i);
+                        sum += toNum(fld != null && el instanceof JSONObject ? ((JSONObject) el).opt(fld) : el);
+                    }}
+                }}
+                return sum;
+            }}
+            if ("COUNT".equals(cn)) {{
+                Object arrO = cargs != null ? evalExpr(cargs.optJSONObject(0), resObj, itemCtx, indexCtx) : null;
+                return (arrO instanceof JSONArray) ? ((JSONArray) arrO).length() : 0;
+            }}
+            if ("ROUND".equals(cn)) {{
+                double v = toNum(cargs != null ? evalExpr(cargs.optJSONObject(0), resObj, itemCtx, indexCtx) : 0);
+                int dec = (int) toNum((cargs != null && cargs.length() > 1) ? evalExpr(cargs.optJSONObject(1), resObj, itemCtx, indexCtx) : 0);
+                double f = Math.pow(10.0, dec);
+                return Math.round(v * f) / f;
+            }}
             return null;
         }}
         if ("binary".equals(k)) {{

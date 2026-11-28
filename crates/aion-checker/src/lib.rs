@@ -237,6 +237,33 @@ mod tests {
     }
 
     #[test]
+    fn validates_sw_img_and_std_functions_fmt_time_fmt_money_sum_count_round() {
+        let src = r#"
+#M_Gasto:Gasto{id:str, concepto:str, monto:f64}
+#S_gastos:list<#M_Gasto> = [{id:"1", concepto:"Renta", monto:8500.0}]
+#S_msi:bool = false
+#S_lbl_total:str = "$0.00"
+#S_lbl_time:str = "05:00"
+#S_n:i32 = 0
+#S_avg:f64 = 0.0
+#N_root:ROOT[16,16,100%,100%,#F8FAFC]{#N_col}
+#N_col:FLEX[v,s,c,10]{#N_img,#N_sw,#N_btn,#N_txt}
+#N_img:IMG[64,64,12,cover]{"https://example.com/logo.png"}
+#N_sw:SW[52,30,#CBD5E1,#16A34A,#S_msi] @change->#S_lbl_time=FMT_TIME(300)
+#N_btn:BTN[220,44,8,#2563EB]{#N_btn_t}
+  @tap->#S_lbl_total=FMT_MONEY(SUM(#S_gastos, "monto"), "$")
+  @tap->#S_n=COUNT(#S_gastos)
+  @tap->#S_avg=ROUND(SUM(#S_gastos, "monto") / 2.0, 2)
+#N_btn_t:TXT[14,600,#FFFFFF]{"Calcular"}
+#N_txt:TXT[16,600,#0F172A]{"{#S_lbl_total} ({#S_n}) · {#S_lbl_time}"}
+"#;
+        let prog = parse_program(src).expect("parse SW/IMG/std");
+        let reg = mock_registry();
+        let report = check_program(&prog, &reg);
+        assert!(report.ok, "{}", report.to_json_pretty().unwrap());
+    }
+
+    #[test]
     fn validates_countdown_timer_example_with_tick_guards_modal_ring_and_alarm() {
         let src = include_str!("../../../examples/countdown_timer.aion");
         let prog = parse_program(src).expect("countdown example must parse");

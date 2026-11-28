@@ -109,6 +109,8 @@ Supports `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, Gin-style `:id` or `{id}` rout
 - `TXT[font_size, weight, color_hex]{"Text with {#S0} or {item.field}"}` — Text label.
 - `INP[width, height, radius, bg_hex, #S_bound]{"Placeholder..."}` — Text input bound to signal `#S_bound` (value coerced to the signal type `i32`/`f64`/`str`).
 - `SEL[width, height, radius, bg_hex, #S_bound]{"MXN|Peso MXN", "USD|Dolar USD"}` — Native dropdown (Web `<select>`, Android `Spinner`, iOS `Menu`). Each option is `"value"` or `"value|label"`; selecting writes `value` into `#S_bound` and fires `@change` (and `@tap`) handlers. **Use `SEL` instead of faking dropdowns with BTN + ROUTER.**
+- `SW[width, height, off_hex, on_hex, #S_bool] @change->...` — Native boolean toggle switch (Web toggle, Android `Switch`, iOS `Toggle`).
+- `IMG[width, height, radius, cover|contain]{"https://..." | "{#S_url}"}` — Image widget with rounded corners and fit mode.
 - `PROG[width, height, radius, track_hex, fill_hex, #S_pct]` — Linear progress bar (`0..100`).
 - `RING[size, thickness, track_hex, fill_hex, #S_pct]` — Circular progress ring (`0..100`, animated on Web/Android/iOS).
 - `MODAL[#S_open]{#N_dialog}` — Full-screen modal overlay shown while `#S_open` is truthy (`true`/`1`).
@@ -148,10 +150,11 @@ Supports `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, Gin-style `:id` or `{id}` rout
   `@loading->TOAST("Cargando...")`
 - Navigation:
   `@tap->NAV(#N_screen)`
-- Dynamic list mutations (`PUSH` / `SETAT` / `REMOVE`) & built-in IDs (`UID()`, `NOW()`):
+- Dynamic list mutations (`PUSH` / `SETAT` / `REMOVE`) & `aion/std` built-in functions (`UID()`, `NOW()`, `FMT_TIME(secs)`, `FMT_MONEY(amt, "$")`, `SUM(#S_list, "field")`, `COUNT(#S_list)`, `ROUND(n, 2)`):
   `@tap->PUSH(#S_presets, {id:UID(), name:#S_name, secs:300})`
   `@tap->SETAT(#S_presets, index, {id:item.id, name:#S_name, secs:#S_secs})`
   `@tap->REMOVE(#S_presets, index)`
+  `@tap->#S_total_fmt = FMT_MONEY(SUM(#S_gastos, "monto"), "$")`
 - Periodic timers (`@tick` = 1000ms, `@tick500` = 500ms) & conditional event guards (`@event if <expr> -> <action>`):
   `@tick if #S_running == 1 && #S_left > 0 -> #S_left = #S_left - 1`
   `@tick if #S_running == 1 && #S_left == 0 -> BEEP()`

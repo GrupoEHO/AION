@@ -441,6 +441,21 @@ fn generate_wasm_index_html(app_name: &str) -> String {
 
     function truthy(v) {{ return !(v === false || v === null || v === undefined || v === 0 || v === '' || v === 'false'); }}
     function clampPct(v) {{ const n = Number(v) || 0; return Math.max(0, Math.min(100, n)); }}
+    function aionFmtTime(sec) {{
+      const s = Math.max(0, Math.floor(Number(sec) || 0));
+      const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
+      const p = n => String(n).padStart(2, '0');
+      return h > 0 ? (p(h) + ':' + p(m) + ':' + p(r)) : (p(m) + ':' + p(r));
+    }}
+    function aionFmtMoney(val, sym) {{
+      const n = Number(val) || 0;
+      const s = sym !== undefined && sym !== null ? String(sym) : '$';
+      return s + n.toLocaleString('en-US', {{ minimumFractionDigits: 2, maximumFractionDigits: 2 }});
+    }}
+    function aionSum(arr, field) {{
+      if (!Array.isArray(arr)) return 0;
+      return arr.reduce((acc, el) => acc + (Number(field && el && typeof el === 'object' ? el[field] : el) || 0), 0);
+    }}
     const sigVal = (id) => (typeof wasmApp !== 'undefined' && wasmApp) ? currentSignals()[id] : signals[id];
 
     function aionBeep() {{
@@ -535,8 +550,17 @@ fn generate_wasm_index_html(app_name: &str) -> String {
       if (k === 'list') return (v || []).map(x => evalExpr(x, resObj, signals, itemCtx));
       if (k === 'call') {{
         const cn = v.callee?.kind?.value;
+        const evArgs = (v.args || []).map(a => (typeof wasmApp !== 'undefined' && wasmApp) ? evalExpr(a, resObj, currentSignals(), itemCtx) : evalExpr(a, resObj, itemCtx));
         if (cn === 'UID') return 'id' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
         if (cn === 'NOW') return Date.now();
+        if (cn === 'FMT_TIME') return aionFmtTime(evArgs[0]);
+        if (cn === 'FMT_MONEY') return aionFmtMoney(evArgs[0], evArgs[1]);
+        if (cn === 'SUM') return aionSum(evArgs[0], evArgs[1]);
+        if (cn === 'COUNT') return Array.isArray(evArgs[0]) ? evArgs[0].length : 0;
+        if (cn === 'ROUND') {{
+          const d = Math.pow(10, Number(evArgs[1]) || 0);
+          return Math.round((Number(evArgs[0]) || 0) * d) / d;
+        }}
         return null;
       }}
       if (k === 'binary') {{
@@ -796,6 +820,48 @@ fn generate_wasm_index_html(app_name: &str) -> String {
             await runNodeEvent(ui, 'tap', null);
             renderStage();
           }});
+        }} else if (ui.widget === 'SW' || ui.widget === 'SWITCH') {{
+          const boundSig = ui.args[4]?.value;
+          const offBg = ui.args[2]?.value ?? '#CBD5E1';
+          const onBg = ui.args[3]?.value ?? '#2563EB';
+          const isOn = boundSig ? truthy(sigVal(boundSig)) : false;
+          el = document.createElement('button');
+          el.className = 'aion-node';
+          el.style.border = '0';
+          el.style.cursor = 'pointer';
+          el.style.padding = '3px';
+          el.style.borderRadius = '999px';
+          el.style.background = isOn ? onBg : offBg;
+          el.style.justifyContent = isOn ? 'flex-end' : 'flex-start';
+          const knob = document.createElement('span');
+          const ks = Math.max(12, box.height - 6);
+          knob.style.width = ks + 'px';
+          knob.style.height = ks + 'px';
+          knob.style.borderRadius = '50%';
+          knob.style.background = '#FFFFFF';
+          knob.style.boxShadow = '0 1px 3px rgba(0,0,0,.25)';
+          el.appendChild(knob);
+          el.onclick = async () => {{
+            if (boundSig) {{
+              const nextB = !truthy(sigVal(boundSig));
+              if (typeof wasmApp !== 'undefined' && wasmApp) wasmApp.set_signal(boundSig, JSON.stringify(nextB));
+              else signals[boundSig] = nextB;
+              savePersisted();
+            }}
+            await runNodeEvent(ui, 'change', null);
+            await runNodeEvent(ui, 'tap', null);
+            renderStage();
+          }};
+        }} else if (ui.widget === 'IMG') {{
+          el = document.createElement('img');
+          el.className = 'aion-node';
+          el.style.pointerEvents = 'none';
+          el.style.borderRadius = (ui.args[2]?.value ?? 0) + 'px';
+          el.style.objectFit = ui.args[3]?.value === 'contain' ? 'contain' : 'cover';
+          el.style.background = '#E2E8F0';
+          if (ui.body?.body_kind === 'text') {{
+            el.src = (typeof wasmApp !== 'undefined' && wasmApp) ? resolveText(ui.body.value.template, currentSignals(), null) : resolveText(ui.body.value.template, null);
+          }}
         }} else if (ui.widget === 'PROG') {{
           el = document.createElement('div');
           el.className = 'aion-node';
@@ -1051,6 +1117,21 @@ fn generate_prod_index_html(app_name: &str) -> String {
 
     function truthy(v) {{ return !(v === false || v === null || v === undefined || v === 0 || v === '' || v === 'false'); }}
     function clampPct(v) {{ const n = Number(v) || 0; return Math.max(0, Math.min(100, n)); }}
+    function aionFmtTime(sec) {{
+      const s = Math.max(0, Math.floor(Number(sec) || 0));
+      const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
+      const p = n => String(n).padStart(2, '0');
+      return h > 0 ? (p(h) + ':' + p(m) + ':' + p(r)) : (p(m) + ':' + p(r));
+    }}
+    function aionFmtMoney(val, sym) {{
+      const n = Number(val) || 0;
+      const s = sym !== undefined && sym !== null ? String(sym) : '$';
+      return s + n.toLocaleString('en-US', {{ minimumFractionDigits: 2, maximumFractionDigits: 2 }});
+    }}
+    function aionSum(arr, field) {{
+      if (!Array.isArray(arr)) return 0;
+      return arr.reduce((acc, el) => acc + (Number(field && el && typeof el === 'object' ? el[field] : el) || 0), 0);
+    }}
     const sigVal = (id) => (typeof wasmApp !== 'undefined' && wasmApp) ? currentSignals()[id] : signals[id];
 
     function aionBeep() {{
@@ -1148,8 +1229,17 @@ fn generate_prod_index_html(app_name: &str) -> String {
       if (k === 'list') return (v || []).map(x => evalExpr(x, resObj, itemCtx));
       if (k === 'call') {{
         const cn = v.callee?.kind?.value;
+        const evArgs = (v.args || []).map(a => (typeof wasmApp !== 'undefined' && wasmApp) ? evalExpr(a, resObj, currentSignals(), itemCtx) : evalExpr(a, resObj, itemCtx));
         if (cn === 'UID') return 'id' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
         if (cn === 'NOW') return Date.now();
+        if (cn === 'FMT_TIME') return aionFmtTime(evArgs[0]);
+        if (cn === 'FMT_MONEY') return aionFmtMoney(evArgs[0], evArgs[1]);
+        if (cn === 'SUM') return aionSum(evArgs[0], evArgs[1]);
+        if (cn === 'COUNT') return Array.isArray(evArgs[0]) ? evArgs[0].length : 0;
+        if (cn === 'ROUND') {{
+          const d = Math.pow(10, Number(evArgs[1]) || 0);
+          return Math.round((Number(evArgs[0]) || 0) * d) / d;
+        }}
         return null;
       }}
       if (k === 'binary') {{
@@ -1403,6 +1493,48 @@ fn generate_prod_index_html(app_name: &str) -> String {
             await runNodeEvent(ui, 'tap', null);
             renderStage();
           }});
+        }} else if (ui.widget === 'SW' || ui.widget === 'SWITCH') {{
+          const boundSig = ui.args[4]?.value;
+          const offBg = ui.args[2]?.value ?? '#CBD5E1';
+          const onBg = ui.args[3]?.value ?? '#2563EB';
+          const isOn = boundSig ? truthy(sigVal(boundSig)) : false;
+          el = document.createElement('button');
+          el.className = 'aion-node';
+          el.style.border = '0';
+          el.style.cursor = 'pointer';
+          el.style.padding = '3px';
+          el.style.borderRadius = '999px';
+          el.style.background = isOn ? onBg : offBg;
+          el.style.justifyContent = isOn ? 'flex-end' : 'flex-start';
+          const knob = document.createElement('span');
+          const ks = Math.max(12, box.height - 6);
+          knob.style.width = ks + 'px';
+          knob.style.height = ks + 'px';
+          knob.style.borderRadius = '50%';
+          knob.style.background = '#FFFFFF';
+          knob.style.boxShadow = '0 1px 3px rgba(0,0,0,.25)';
+          el.appendChild(knob);
+          el.onclick = async () => {{
+            if (boundSig) {{
+              const nextB = !truthy(sigVal(boundSig));
+              if (typeof wasmApp !== 'undefined' && wasmApp) wasmApp.set_signal(boundSig, JSON.stringify(nextB));
+              else signals[boundSig] = nextB;
+              savePersisted();
+            }}
+            await runNodeEvent(ui, 'change', null);
+            await runNodeEvent(ui, 'tap', null);
+            renderStage();
+          }};
+        }} else if (ui.widget === 'IMG') {{
+          el = document.createElement('img');
+          el.className = 'aion-node';
+          el.style.pointerEvents = 'none';
+          el.style.borderRadius = (ui.args[2]?.value ?? 0) + 'px';
+          el.style.objectFit = ui.args[3]?.value === 'contain' ? 'contain' : 'cover';
+          el.style.background = '#E2E8F0';
+          if (ui.body?.body_kind === 'text') {{
+            el.src = (typeof wasmApp !== 'undefined' && wasmApp) ? resolveText(ui.body.value.template, currentSignals(), null) : resolveText(ui.body.value.template, null);
+          }}
         }} else if (ui.widget === 'PROG') {{
           el = document.createElement('div');
           el.className = 'aion-node';

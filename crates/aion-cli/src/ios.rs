@@ -1371,8 +1371,43 @@ final class AionStore: ObservableObject {
                let callee = cv["callee"] as? [String: Any],
                let ck = callee["kind"] as? [String: Any] {
                 let cn = ck["value"] as? String ?? ""
+                let rawArgs = (cv["args"] as? [[String: Any]]) ?? []
+                let evArgs = rawArgs.map { evalExpr($0, res: res, item: item, index: index) }
                 if cn == "UID" { return UUID().uuidString }
                 if cn == "NOW" { return Date().timeIntervalSince1970 * 1000.0 }
+                if cn == "FMT_TIME" {
+                    let s = max(0, Int((evArgs.first as? NSNumber)?.doubleValue ?? Double("\(evArgs.first ?? 0)") ?? 0))
+                    let h = s / 3600, m = (s % 3600) / 60, r = s % 60
+                    return h > 0 ? String(format: "%02d:%02d:%02d", h, m, r) : String(format: "%02d:%02d", m, r)
+                }
+                if cn == "FMT_MONEY" {
+                    let amt = (evArgs.first as? NSNumber)?.doubleValue ?? Double("\(evArgs.first ?? 0)") ?? 0
+                    let sym = evArgs.count > 1 ? stringifyValue(evArgs[1]) : "$"
+                    let nf = NumberFormatter()
+                    nf.numberStyle = .decimal
+                    nf.minimumFractionDigits = 2
+                    nf.maximumFractionDigits = 2
+                    return sym + (nf.string(from: NSNumber(value: amt)) ?? String(format: "%.2f", amt))
+                }
+                if cn == "SUM" {
+                    let arr = (evArgs.first as? [Any]) ?? []
+                    let fld = evArgs.count > 1 ? stringifyValue(evArgs[1]) : nil
+                    var total = 0.0
+                    for el in arr {
+                        let v: Any? = (fld != nil && el is [String: Any]) ? (el as? [String: Any])?[fld!] : el
+                        total += (v as? NSNumber)?.doubleValue ?? Double("\(v ?? 0)") ?? 0
+                    }
+                    return total
+                }
+                if cn == "COUNT" {
+                    return (evArgs.first as? [Any])?.count ?? 0
+                }
+                if cn == "ROUND" {
+                    let v = (evArgs.first as? NSNumber)?.doubleValue ?? Double("\(evArgs.first ?? 0)") ?? 0
+                    let dec = evArgs.count > 1 ? Int((evArgs[1] as? NSNumber)?.doubleValue ?? 0) : 0
+                    let f = pow(10.0, Double(dec))
+                    return (v * f).rounded() / f
+                }
             }
             return ""
         case "binary":
@@ -1507,6 +1542,34 @@ struct AionNodeView: View {
         case "NAV":
             Color(aionHex: store.argString(args, 2, "#0F172A"))
                 .allowsHitTesting(false)
+        case "SW", "SWITCH":
+            let onHex = store.argString(args, 3, "#2563EB")
+            let boundSig = store.argStringOpt(args, 4)
+            Toggle("", isOn: Binding(
+                get: { boundSig.map { store.truthy(store.signals[$0]) } ?? false },
+                set: { newVal in
+                    if let sig = boundSig { store.setSignal(sig, value: newVal) }
+                    store.runNodeEvent(ui, eventName: "change", item: nil, index: nil)
+                    store.runNodeEvent(ui, eventName: "tap", item: nil, index: nil)
+                }
+            ))
+            .labelsHidden()
+            .tint(Color(aionHex: onHex))
+        case "IMG":
+            let radius = store.argFloat(args, 2, 0) * scale
+            let isContain = store.argString(args, 3, "cover") == "contain"
+            let rawUrl = ((bodyDict?["value"] as? [String: Any])?["template"] as? String).map { store.resolveText($0) } ?? ""
+            AsyncImage(url: URL(string: rawUrl)) { img in
+                if isContain {
+                    img.resizable().scaledToFit()
+                } else {
+                    img.resizable().scaledToFill()
+                }
+            } placeholder: {
+                Color(aionHex: "#E2E8F0")
+            }
+            .clipShape(RoundedRectangle(cornerRadius: radius))
+            .allowsHitTesting(false)
         case "PROG":
             let radius = store.argFloat(args, 2, 6) * scale
             let trackHex = store.argString(args, 3, "#E2E8F0")

@@ -777,7 +777,7 @@ impl<'a> Checker<'a> {
                 }
 
                 let bound_idx = match ui.widget.as_str() {
-                    "INP" | "SEL" | "SELECT" | "RING" => Some(4),
+                    "INP" | "SEL" | "SELECT" | "SW" | "SWITCH" | "RING" => Some(4),
                     "PROG" => Some(5),
                     "MODAL" => Some(0),
                     _ => None,
@@ -1565,6 +1565,24 @@ impl<'a> Checker<'a> {
                     match fname.as_str() {
                         "UID" => return AionType::Str,
                         "NOW" => return AionType::F64,
+                        "FMT_TIME" | "FMT_MONEY" => {
+                            for arg in args {
+                                let _ = self.eval_expr(node_id, arg, locals, api_ctx);
+                            }
+                            return AionType::Str;
+                        }
+                        "SUM" | "ROUND" => {
+                            for arg in args {
+                                let _ = self.eval_expr(node_id, arg, locals, api_ctx);
+                            }
+                            return AionType::F64;
+                        }
+                        "COUNT" => {
+                            for arg in args {
+                                let _ = self.eval_expr(node_id, arg, locals, api_ctx);
+                            }
+                            return AionType::I32;
+                        }
                         _ => {}
                     }
                 }
