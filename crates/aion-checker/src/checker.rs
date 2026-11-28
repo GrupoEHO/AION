@@ -838,23 +838,89 @@ impl<'a> Checker<'a> {
                     ui.widget.as_str(),
                     "ROOT" | "FLEX" | "LIST" | "ROUTER" | "MODAL" | "NAV"
                         | "BTN" | "INP" | "SEL" | "SELECT" | "SW" | "SWITCH"
-                        | "TXT" | "IMG" | "PROG" | "RING"
+                        | "TXT" | "IMG" | "ICON" | "PROG" | "RING"
                 ) {
                     self.diagnostics.push(
                         Diagnostic::error(
                             "E_UNKNOWN_WIDGET",
                             Phase::Checker,
                             format!(
-                                "unknown widget `{}` in `{}` (not one of the 14 base primitives)",
+                                "unknown widget `{}` in `{}` (not one of the 15 base primitives)",
                                 ui.widget, node.id
                             ),
                             node.span,
                         )
                         .with_node_id(node.id.as_str())
-                        .with_expected("ROOT, FLEX, LIST, ROUTER, MODAL, NAV, BTN, INP, SEL, SW, TXT, IMG, PROG, RING, or alias.ExtWidget")
+                        .with_expected("ROOT, FLEX, LIST, ROUTER, MODAL, NAV, BTN, INP, SEL, SW, TXT, IMG, ICON, PROG, RING, or alias.ExtWidget")
                         .with_found(ui.widget.clone())
-                        .with_fix_hint("Use one of the 14 base primitives, import a pure-AION library with `#USE`, or declare a native `#EXT` widget."),
+                        .with_fix_hint("Use one of the 15 base primitives, import a pure-AION library with `#USE`, or declare a native `#EXT` widget."),
                     );
+                }
+
+                if ui.widget == "ICON" {
+                    if let UiBody::Text { template, .. } = &ui.body {
+                        if !template.contains('{') {
+                            let icon_ref = template.trim();
+                            if let Some((alias, icon_name)) = icon_ref.split_once(':') {
+                                match self.ext_nodes.get(alias) {
+                                    Some((_, Some(manifest), _)) => {
+                                        if !manifest.icons.contains_key(icon_name) {
+                                            self.diagnostics.push(
+                                                Diagnostic::error(
+                                                    "E_UNKNOWN_ICON",
+                                                    Phase::Ext,
+                                                    format!(
+                                                        "icon `{icon_name}` is not exported by `#EXT:{alias}` ({})",
+                                                        manifest.id
+                                                    ),
+                                                    node.span,
+                                                )
+                                                .with_node_id(node.id.as_str())
+                                                .with_found(icon_ref.to_string())
+                                                .with_fix_hint(format!(
+                                                    "Add `{icon_name}` to `icons` in `{}` or use an available icon.",
+                                                    manifest.id
+                                                )),
+                                            );
+                                        }
+                                    }
+                                    Some((_, None, _)) => {}
+                                    None => {
+                                        self.diagnostics.push(
+                                            Diagnostic::error(
+                                                "E_UNKNOWN_EXT",
+                                                Phase::Ext,
+                                                format!(
+                                                    "ICON `{}` references undeclared `#EXT` icon pack alias `{alias}`",
+                                                    node.id
+                                                ),
+                                                node.span,
+                                            )
+                                            .with_node_id(node.id.as_str())
+                                            .with_fix_hint(format!(
+                                                "Declare `#EXT:{alias} = \"org/icons@1.0\"` at the top of the file."
+                                            )),
+                                        );
+                                    }
+                                }
+                            } else if !icon_ref.is_empty() && !aion_ext::is_std_icon(icon_ref) {
+                                self.diagnostics.push(
+                                    Diagnostic::error(
+                                        "E_UNKNOWN_ICON",
+                                        Phase::Checker,
+                                        format!(
+                                            "unknown built-in icon `{icon_ref}` in `{}`",
+                                            node.id
+                                        ),
+                                        node.span,
+                                    )
+                                    .with_node_id(node.id.as_str())
+                                    .with_found(icon_ref.to_string())
+                                    .with_fix_hint("Use a standard icon from `aion/std` (e.g. `home`, `add`, `edit`, `trash`, `play`, `settings`) or an external pack `\"alias:name\"`."),
+                                );
+                            }
+                        }
+                    }
                 }
 
                 let bound_idx = match ui.widget.as_str() {

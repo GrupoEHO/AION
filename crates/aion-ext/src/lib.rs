@@ -1,7 +1,9 @@
+pub mod icons;
 pub mod manifest;
 pub mod registry;
 pub mod wit;
 
+pub use icons::*;
 pub use manifest::*;
 pub use registry::*;
 pub use wit::*;

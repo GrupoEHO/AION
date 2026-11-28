@@ -100,10 +100,13 @@ pub fn build_android_aab(
         .clone()
         .unwrap_or_else(|| format!("http://10.0.2.2:{default_port}"));
 
+    let reg = crate::build_registry(None).unwrap_or_default();
+    let icons = aion_ext::collect_program_icons(program, &reg);
     let bundle_payload = json!({
         "apiBaseUrl": api_base_url,
         "program": program,
         "signals": initial_signals,
+        "icons": icons,
         "layout": layout,
         "proto": proto,
     });
@@ -516,6 +519,7 @@ import android.app.NotificationManager;
 import android.content.pm.PackageManager;
 import android.graphics.Canvas;
 import android.graphics.Paint;
+import android.graphics.Path;
 import android.graphics.RectF;
 import android.media.AudioManager;
 import android.media.ToneGenerator;
@@ -581,6 +585,7 @@ public class MainActivity extends Activity {{
     private JSONObject bundle;
     private String apiBaseUrl = "http://10.0.2.2:8080";
     private final Map<String, Object> signals = new HashMap<>();
+    private final Map<String, String> icons = new HashMap<>();
     private final Set<String> persistedSignals = new HashSet<>();
     private final Map<String, String> signalTypes = new HashMap<>();
     private final Map<String, JSONObject> nodeMap = new HashMap<>();
@@ -618,6 +623,15 @@ public class MainActivity extends Activity {{
                 while (keys.hasNext()) {{
                     String k = keys.next();
                     signals.put(k, sigObj.opt(k));
+                }}
+            }}
+
+            JSONObject iconObj = bundle.optJSONObject("icons");
+            if (iconObj != null) {{
+                Iterator<String> ik = iconObj.keys();
+                while (ik.hasNext()) {{
+                    String k = ik.next();
+                    icons.put(k, iconObj.optString(k, ""));
                 }}
             }}
 
@@ -787,6 +801,13 @@ public class MainActivity extends Activity {{
                     }});
                 }}
                 view = iv;
+            }} else if ("ICON".equals(widget)) {{
+                String colorHex = getStringArg(args, 1, "#0F172A");
+                JSONObject bVal = body != null ? body.optJSONObject("value") : null;
+                String tpl = bVal != null ? bVal.optString("template", "") : "";
+                IconView ic = new IconView(tpl, parseColorSafe(colorHex, Color.BLACK));
+                shapeViews.add(ic);
+                view = ic;
             }} else if ("PROG".equals(widget) || "RING".equals(widget)) {{
                 boolean isRing = "RING".equals(widget);
                 ShapeView sh = isRing
@@ -1513,6 +1534,93 @@ public class MainActivity extends Activity {{
     private String readAsset(String name) throws Exception {{
         try (InputStream is = getAssets().open(name)) {{
             return readStream(is);
+        }}
+    }}
+
+    private class IconView extends View {{
+        private final String template;
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Path path = new Path();
+
+        IconView(String template, int color) {{
+            super(MainActivity.this);
+            this.template = template;
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setColor(color);
+            paint.setStrokeCap(Paint.Cap.ROUND);
+            paint.setStrokeJoin(Paint.Join.ROUND);
+        }}
+
+        @Override
+        protected void onDraw(Canvas canvas) {{
+            super.onDraw(canvas);
+            String name = resolveText(template, null).trim();
+            String d = icons.get(name);
+            if (d == null || d.isEmpty()) return;
+            float s = Math.min(getWidth(), getHeight()) / 24f;
+            if (s <= 0f) return;
+            paint.setStrokeWidth(Math.max(1.5f, 2f * s));
+            path.reset();
+            parseSvgPath(d, s, path);
+            canvas.drawPath(path, paint);
+        }}
+    }}
+
+    private static void parseSvgPath(String d, float s, Path out) {{
+        int i = 0;
+        int n = d.length();
+        char cmd = 0;
+        float cx = 0f, cy = 0f, sx = 0f, sy = 0f;
+        while (i < n) {{
+            while (i < n && (d.charAt(i) <= ' ' || d.charAt(i) == ',')) i++;
+            if (i >= n) break;
+            char ch = d.charAt(i);
+            if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z')) {{
+                cmd = ch;
+                i++;
+                if (cmd == 'Z' || cmd == 'z') {{
+                    out.close();
+                    cx = sx;
+                    cy = sy;
+                    continue;
+                }}
+            }}
+            if (cmd == 0) break;
+            float[] p = new float[6];
+            int need = (cmd == 'H' || cmd == 'h' || cmd == 'V' || cmd == 'v') ? 1
+                : (cmd == 'C' || cmd == 'c') ? 6
+                : (cmd == 'Q' || cmd == 'q') ? 4 : 2;
+            int got = 0;
+            while (got < need) {{
+                while (i < n && (d.charAt(i) <= ' ' || d.charAt(i) == ',')) i++;
+                int start = i;
+                if (i < n && (d.charAt(i) == '-' || d.charAt(i) == '+')) i++;
+                boolean dot = false;
+                while (i < n) {{
+                    char c = d.charAt(i);
+                    if (c >= '0' && c <= '9') {{ i++; }}
+                    else if (c == '.' && !dot) {{ dot = true; i++; }}
+                    else break;
+                }}
+                if (i == start) break;
+                try {{ p[got++] = Float.parseFloat(d.substring(start, i)); }} catch (Exception e) {{ break; }}
+            }}
+            if (got < need) break;
+            switch (cmd) {{
+                case 'M': cx = p[0]; cy = p[1]; sx = cx; sy = cy; out.moveTo(cx * s, cy * s); cmd = 'L'; break;
+                case 'm': cx += p[0]; cy += p[1]; sx = cx; sy = cy; out.moveTo(cx * s, cy * s); cmd = 'l'; break;
+                case 'L': cx = p[0]; cy = p[1]; out.lineTo(cx * s, cy * s); break;
+                case 'l': cx += p[0]; cy += p[1]; out.lineTo(cx * s, cy * s); break;
+                case 'H': cx = p[0]; out.lineTo(cx * s, cy * s); break;
+                case 'h': cx += p[0]; out.lineTo(cx * s, cy * s); break;
+                case 'V': cy = p[0]; out.lineTo(cx * s, cy * s); break;
+                case 'v': cy += p[0]; out.lineTo(cx * s, cy * s); break;
+                case 'C': out.cubicTo(p[0] * s, p[1] * s, p[2] * s, p[3] * s, p[4] * s, p[5] * s); cx = p[4]; cy = p[5]; break;
+                case 'c': out.cubicTo((cx + p[0]) * s, (cy + p[1]) * s, (cx + p[2]) * s, (cy + p[3]) * s, (cx + p[4]) * s, (cy + p[5]) * s); cx += p[4]; cy += p[5]; break;
+                case 'Q': out.quadTo(p[0] * s, p[1] * s, p[2] * s, p[3] * s); cx = p[2]; cy = p[3]; break;
+                case 'q': out.quadTo((cx + p[0]) * s, (cy + p[1]) * s, (cx + p[2]) * s, (cy + p[3]) * s); cx += p[2]; cy += p[3]; break;
+                default: break;
+            }}
         }}
     }}
 

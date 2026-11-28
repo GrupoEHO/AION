@@ -393,4 +393,44 @@ mod tests {
         assert!(!bad_report.ok);
         assert_eq!(bad_report.diagnostics[0].code, "E_UNKNOWN_FIELD");
     }
+
+    #[test]
+    fn validates_std_and_ext_icon_packs() {
+        let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests");
+        let mut reg = mock_registry();
+        reg.register_manifest_file(&base.join("aion-icons-brand-1.0.0.json"))
+            .unwrap();
+
+        let ok_src = r#"
+#EXT:brand = "aion/icons-brand@1.0"
+#S_ic:str="play"
+#N0:ROOT[16,16,100%,100%,#F8FAFC]{#N1}
+#N1:FLEX[h,c,c,12]{#N2,#N3,#N4}
+#N2:ICON[24,#0F172A]{"home"}
+#N3:ICON[28,#EF4444]{"brand:rocket"}
+#N4:ICON[24,#2563EB]{"{#S_ic}"}
+"#;
+        let prog = parse_program(ok_src).expect("should parse ICON widgets");
+        let report = check_program(&prog, &reg);
+        assert!(
+            report.ok,
+            "expected zero errors, got: {}",
+            report.to_json_pretty().unwrap()
+        );
+        let icons = aion_ext::collect_program_icons(&prog, &reg);
+        assert!(icons.contains_key("home"));
+        assert!(icons.contains_key("brand:rocket"));
+
+        let bad_std = ok_src.replace("\"home\"", "\"nonexistent_icon\"");
+        let bad_prog = parse_program(&bad_std).expect("parse");
+        let bad_rep = check_program(&bad_prog, &reg);
+        assert!(!bad_rep.ok);
+        assert_eq!(bad_rep.diagnostics[0].code, "E_UNKNOWN_ICON");
+
+        let bad_ext = ok_src.replace("\"brand:rocket\"", "\"brand:missing_icon\"");
+        let bad_prog2 = parse_program(&bad_ext).expect("parse");
+        let bad_rep2 = check_program(&bad_prog2, &reg);
+        assert!(!bad_rep2.ok);
+        assert_eq!(bad_rep2.diagnostics[0].code, "E_UNKNOWN_ICON");
+    }
 }

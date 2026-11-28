@@ -168,6 +168,8 @@ pub fn build_web_bundle(
     let full_version = format!("{}+{}", opts.version_name, opts.build_number);
     let cache_tag = format!("{}-{}", opts.version_name, opts.build_number);
 
+    let reg = crate::build_registry(None).unwrap_or_default();
+    let icons = aion_ext::collect_program_icons(program, &reg);
     let bundle_payload = json!({
         "appName": opts.app_name,
         "version": opts.version_name,
@@ -178,6 +180,7 @@ pub fn build_web_bundle(
         "apiBaseUrl": api_base_url,
         "program": program,
         "signals": initial_signals,
+        "icons": icons,
         "layouts": {
             "mobile": mobile_layout,
             "desktop": desktop_layout,
@@ -945,6 +948,33 @@ fn generate_wasm_index_html(
           if (ui.body?.body_kind === 'text') {{
             el.src = (typeof wasmApp !== 'undefined' && wasmApp) ? resolveText(ui.body.value.template, currentSignals(), null) : resolveText(ui.body.value.template, null);
           }}
+        }} else if (ui.widget === 'ICON') {{
+          const size = ui.args[0]?.value ?? 24;
+          const color = ui.args[1]?.value ?? '#0F172A';
+          const name = ui.body?.body_kind === 'text'
+            ? ((typeof wasmApp !== 'undefined' && wasmApp) ? resolveText(ui.body.value.template, currentSignals(), null) : resolveText(ui.body.value.template, null)).trim()
+            : '';
+          const d = (bundle.icons && bundle.icons[name]) || '';
+          el = document.createElement('div');
+          el.className = 'aion-node';
+          el.style.pointerEvents = 'none';
+          el.style.justifyContent = 'center';
+          el.style.alignItems = 'center';
+          const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+          svg.setAttribute('viewBox', '0 0 24 24');
+          svg.setAttribute('width', String(size));
+          svg.setAttribute('height', String(size));
+          svg.setAttribute('fill', 'none');
+          svg.setAttribute('stroke', color);
+          svg.setAttribute('stroke-width', '2');
+          svg.setAttribute('stroke-linecap', 'round');
+          svg.setAttribute('stroke-linejoin', 'round');
+          if (d) {{
+            const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            p.setAttribute('d', d);
+            svg.appendChild(p);
+          }}
+          el.appendChild(svg);
         }} else if (ui.widget === 'PROG') {{
           el = document.createElement('div');
           el.className = 'aion-node';
@@ -1641,6 +1671,33 @@ fn generate_prod_index_html(
           if (ui.body?.body_kind === 'text') {{
             el.src = (typeof wasmApp !== 'undefined' && wasmApp) ? resolveText(ui.body.value.template, currentSignals(), null) : resolveText(ui.body.value.template, null);
           }}
+        }} else if (ui.widget === 'ICON') {{
+          const size = ui.args[0]?.value ?? 24;
+          const color = ui.args[1]?.value ?? '#0F172A';
+          const name = ui.body?.body_kind === 'text'
+            ? ((typeof wasmApp !== 'undefined' && wasmApp) ? resolveText(ui.body.value.template, currentSignals(), null) : resolveText(ui.body.value.template, null)).trim()
+            : '';
+          const d = (bundle.icons && bundle.icons[name]) || '';
+          el = document.createElement('div');
+          el.className = 'aion-node';
+          el.style.pointerEvents = 'none';
+          el.style.justifyContent = 'center';
+          el.style.alignItems = 'center';
+          const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+          svg.setAttribute('viewBox', '0 0 24 24');
+          svg.setAttribute('width', String(size));
+          svg.setAttribute('height', String(size));
+          svg.setAttribute('fill', 'none');
+          svg.setAttribute('stroke', color);
+          svg.setAttribute('stroke-width', '2');
+          svg.setAttribute('stroke-linecap', 'round');
+          svg.setAttribute('stroke-linejoin', 'round');
+          if (d) {{
+            const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            p.setAttribute('d', d);
+            svg.appendChild(p);
+          }}
+          el.appendChild(svg);
         }} else if (ui.widget === 'PROG') {{
           el = document.createElement('div');
           el.className = 'aion-node';

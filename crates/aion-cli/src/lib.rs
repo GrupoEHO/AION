@@ -27,17 +27,23 @@ pub fn build_registry(manifests_dir: Option<&Path>) -> Result<ExtRegistry, Strin
     reg.register_plugin(Arc::new(MongoPlugin::new()))
         .map_err(|e| format!("failed to register mongo plugin: {e}"))?;
 
-    if let Some(dir) = manifests_dir {
+    let fallback_local = Path::new("manifests");
+    let fallback_sdk = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../manifests");
+    let dirs: Vec<&Path> = match manifests_dir {
+        Some(dir) => vec![dir, fallback_sdk.as_path()],
+        None => vec![fallback_local, fallback_sdk.as_path()],
+    };
+
+    for dir in dirs {
         if dir.is_dir() {
             let entries = fs::read_dir(dir).map_err(|e| format!("read {}: {e}", dir.display()))?;
             for entry in entries.flatten() {
                 let p = entry.path();
                 if p.extension().and_then(|e| e.to_str()) == Some("json") {
-                    let manifest = aion_ext::ExtManifest::from_file(&p)
-                        .map_err(|e| format!("manifest {}: {e}", p.display()))?;
-                    if reg.resolve(&manifest.id, &manifest.ver).is_none() {
-                        reg.register_manifest(manifest)
-                            .map_err(|e| format!("register {}: {e}", p.display()))?;
+                    if let Ok(manifest) = aion_ext::ExtManifest::from_file(&p) {
+                        if reg.resolve(&manifest.id, &manifest.ver).is_none() {
+                            let _ = reg.register_manifest(manifest);
+                        }
                     }
                 }
             }

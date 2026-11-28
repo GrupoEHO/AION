@@ -558,6 +558,19 @@ fn ui_node_to_style(ui: &UiNode, signals: Option<&SignalStore>) -> (Style, bool)
             };
             (style, false)
         }
+        "ICON" => {
+            // ICON[size, color_hex]{"name" | "pack:name" | "{#S_icon}"}
+            let size = arg_as_f32(ui.args.first()).unwrap_or(24.0);
+            let style = Style {
+                flex_shrink: 0.0,
+                size: Size {
+                    width: length(size),
+                    height: length(size),
+                },
+                ..Default::default()
+            };
+            (style, false)
+        }
         "PROG" => {
             // PROG[width, height, radius, #track, #fill, #S_pct]  (pct 0..100)
             let width = arg_as_dim(ui.args.first()).unwrap_or_else(|| length(200.0_f32));

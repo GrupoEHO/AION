@@ -89,6 +89,8 @@ pub struct ExtManifest {
     pub fns: BTreeMap<String, ExtFnSig>,
     #[serde(default)]
     pub widgets: BTreeMap<String, ExtWidgetSpec>,
+    #[serde(default)]
+    pub icons: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]

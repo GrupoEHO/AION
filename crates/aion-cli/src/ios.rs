@@ -107,10 +107,13 @@ pub fn build_ios_app(
         .clone()
         .unwrap_or_else(|| format!("http://127.0.0.1:{default_port}"));
 
+    let reg = crate::build_registry(None).unwrap_or_default();
+    let icons = aion_ext::collect_program_icons(program, &reg);
     let bundle_payload = json!({
         "apiBaseUrl": api_base_url,
         "program": program,
         "signals": initial_signals,
+        "icons": icons,
         "layout": layout,
         "proto": proto,
     });
@@ -883,6 +886,7 @@ final class AionStore: ObservableObject {
     @Published var loadError: String? = nil
 
     var signalTypes: [String: String] = [:]
+    var icons: [String: String] = [:]
     var persistedSignals: Set<String> = []
     var apiBaseUrl: String = "http://127.0.0.1:8080"
     var viewportWidth: CGFloat = 390
@@ -910,6 +914,9 @@ final class AionStore: ObservableObject {
         }
         if let sigs = root["signals"] as? [String: Any] {
             signals = sigs
+        }
+        if let ic = root["icons"] as? [String: String] {
+            icons = ic
         }
 
         if let program = root["program"] as? [String: Any],
@@ -1570,6 +1577,18 @@ struct AionNodeView: View {
             }
             .clipShape(RoundedRectangle(cornerRadius: radius))
             .allowsHitTesting(false)
+        case "ICON":
+            let size = store.argFloat(args, 0, 24) * scale
+            let colorHex = store.argString(args, 1, "#0F172A")
+            let name = (((bodyDict?["value"] as? [String: Any])?["template"] as? String).map { store.resolveText($0) } ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let d = store.icons[name] ?? ""
+            AionIconShape(pathData: d)
+                .stroke(
+                    Color(aionHex: colorHex),
+                    style: StrokeStyle(lineWidth: max(1.5, 2.0 * (size / 24.0)), lineCap: .round, lineJoin: .round)
+                )
+                .allowsHitTesting(false)
         case "PROG":
             let radius = store.argFloat(args, 2, 6) * scale
             let trackHex = store.argString(args, 3, "#E2E8F0")
@@ -1756,6 +1775,113 @@ struct AionDynamicRowView: View {
             .padding(.vertical, 8 * scale)
             .background(RoundedRectangle(cornerRadius: 8 * scale).fill(Color.white))
         }
+    }
+}
+
+struct AionIconShape: Shape {
+    let pathData: String
+
+    func path(in rect: CGRect) -> Path {
+        var out = Path()
+        let s = min(rect.width, rect.height) / 24.0
+        guard s > 0, !pathData.isEmpty else { return out }
+        let chars = Array(pathData)
+        let n = chars.count
+        var i = 0
+        var cmd: Character = "\0"
+        var cx: CGFloat = 0, cy: CGFloat = 0, sx: CGFloat = 0, sy: CGFloat = 0
+
+        func skipSep() {
+            while i < n && (chars[i] == " " || chars[i] == "\n" || chars[i] == "\t" || chars[i] == ",") {
+                i += 1
+            }
+        }
+        func readNum() -> CGFloat? {
+            skipSep()
+            let start = i
+            if i < n && (chars[i] == "-" || chars[i] == "+") { i += 1 }
+            var dot = false
+            while i < n {
+                let c = chars[i]
+                if c >= "0" && c <= "9" { i += 1 }
+                else if c == "." && !dot { dot = true; i += 1 }
+                else { break }
+            }
+            if i == start { return nil }
+            guard let v = Double(String(chars[start..<i])) else { return nil }
+            return CGFloat(v)
+        }
+
+        while i < n {
+            skipSep()
+            if i >= n { break }
+            let ch = chars[i]
+            if (ch >= "A" && ch <= "Z") || (ch >= "a" && ch <= "z") {
+                cmd = ch
+                i += 1
+                if cmd == "Z" || cmd == "z" {
+                    out.closeSubpath()
+                    cx = sx; cy = sy
+                    continue
+                }
+            }
+            if cmd == "\0" { break }
+            switch cmd {
+            case "M":
+                guard let x = readNum(), let y = readNum() else { return out }
+                cx = x; cy = y; sx = cx; sy = cy
+                out.move(to: CGPoint(x: cx * s, y: cy * s))
+                cmd = "L"
+            case "m":
+                guard let dx = readNum(), let dy = readNum() else { return out }
+                cx += dx; cy += dy; sx = cx; sy = cy
+                out.move(to: CGPoint(x: cx * s, y: cy * s))
+                cmd = "l"
+            case "L":
+                guard let x = readNum(), let y = readNum() else { return out }
+                cx = x; cy = y
+                out.addLine(to: CGPoint(x: cx * s, y: cy * s))
+            case "l":
+                guard let dx = readNum(), let dy = readNum() else { return out }
+                cx += dx; cy += dy
+                out.addLine(to: CGPoint(x: cx * s, y: cy * s))
+            case "H":
+                guard let x = readNum() else { return out }
+                cx = x
+                out.addLine(to: CGPoint(x: cx * s, y: cy * s))
+            case "h":
+                guard let dx = readNum() else { return out }
+                cx += dx
+                out.addLine(to: CGPoint(x: cx * s, y: cy * s))
+            case "V":
+                guard let y = readNum() else { return out }
+                cy = y
+                out.addLine(to: CGPoint(x: cx * s, y: cy * s))
+            case "v":
+                guard let dy = readNum() else { return out }
+                cy += dy
+                out.addLine(to: CGPoint(x: cx * s, y: cy * s))
+            case "C":
+                guard let x1 = readNum(), let y1 = readNum(), let x2 = readNum(), let y2 = readNum(), let x = readNum(), let y = readNum() else { return out }
+                out.addCurve(to: CGPoint(x: x * s, y: y * s), control1: CGPoint(x: x1 * s, y: y1 * s), control2: CGPoint(x: x2 * s, y: y2 * s))
+                cx = x; cy = y
+            case "c":
+                guard let x1 = readNum(), let y1 = readNum(), let x2 = readNum(), let y2 = readNum(), let dx = readNum(), let dy = readNum() else { return out }
+                out.addCurve(to: CGPoint(x: (cx + dx) * s, y: (cy + dy) * s), control1: CGPoint(x: (cx + x1) * s, y: (cy + y1) * s), control2: CGPoint(x: (cx + x2) * s, y: (cy + y2) * s))
+                cx += dx; cy += dy
+            case "Q":
+                guard let x1 = readNum(), let y1 = readNum(), let x = readNum(), let y = readNum() else { return out }
+                out.addQuadCurve(to: CGPoint(x: x * s, y: y * s), control: CGPoint(x: x1 * s, y: y1 * s))
+                cx = x; cy = y
+            case "q":
+                guard let x1 = readNum(), let y1 = readNum(), let dx = readNum(), let dy = readNum() else { return out }
+                out.addQuadCurve(to: CGPoint(x: (cx + dx) * s, y: (cy + dy) * s), control: CGPoint(x: (cx + x1) * s, y: (cy + y1) * s))
+                cx += dx; cy += dy
+            default:
+                return out
+            }
+        }
+        return out
     }
 }
 
