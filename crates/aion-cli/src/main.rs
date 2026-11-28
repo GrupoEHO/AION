@@ -456,12 +456,11 @@ fn main() {
                 process::exit(2);
             }
             let web_file = PathBuf::from(&args[2]);
-            let src = read_file_or_exit(&web_file);
             let reg = build_registry(Some(&manifests_dir)).unwrap_or_else(|e| {
                 eprintln!("{{\"ok\":false,\"error\":\"{e}\"}}");
                 process::exit(1);
             });
-            let prog = match parse_program(&src) {
+            let prog = match parse_file_with_includes(&web_file) {
                 Ok(p) => p,
                 Err(diags) => {
                     let report = DiagnosticReport::from_diagnostics(diags);
@@ -474,6 +473,7 @@ fn main() {
                 println!("{}", report.to_json_pretty().unwrap());
                 process::exit(1);
             }
+            let open_browser = !args.iter().any(|a| a == "--no-open");
             let rt = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()
@@ -486,6 +486,7 @@ fn main() {
                 prog,
                 Arc::new(reg),
                 RuntimeConfig::new(),
+                open_browser,
             )) {
                 eprintln!("{{\"ok\":false,\"error\":\"{e}\"}}");
                 process::exit(1);

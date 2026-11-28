@@ -7,7 +7,7 @@ use std::time::{Duration, SystemTime};
 use aion_ast::{DiagnosticReport, NodeKind, Program, PropValue};
 use aion_checker::check_program;
 use aion_ext::ExtRegistry;
-use aion_parser::parse_program;
+use aion_parser::parse_file_with_includes;
 use aion_runtime_net::{build_router, generate_proto3, RuntimeConfig};
 use aion_runtime_ui::{compute_layout, SignalStore, Viewport};
 use axum::body::Body;
@@ -62,6 +62,7 @@ const WEB_SHELL_HTML: &str = r#"<!doctype html>
       <button id="btn-desktop" onclick="loadViewport('desktop', false)">Desktop 1440×900</button>
       <button class="reload" onclick="triggerHotReload()" title="Preserva estado #S (tecla r)">⚡ Hot Reload</button>
       <button class="restart" onclick="triggerHotRestart()" title="Reinicia estado #S (tecla R)">🔄 Hot Restart</button>
+      <button style="background:#DC2626;" onclick="triggerShutdown()" title="Detener servidor web">⏹ Detener</button>
       <span id="status-badge" class="badge">Cargando...</span>
     </div>
     <div id="stage-wrap">
@@ -766,6 +767,12 @@ const WEB_SHELL_HTML: &str = r#"<!doctype html>
       await fetch('/__aion/restart', { method: 'POST' });
     }
 
+    async function triggerShutdown() {
+      try { await fetch('/__aion/shutdown', { method: 'POST' }); } catch (_) {}
+      document.getElementById('status-badge').textContent = 'Servidor detenido';
+      showToast('⏹ Servidor AION detenido');
+    }
+
     function connectHotReloadStream() {
       const es = new EventSource('/__aion/events');
       es.onmessage = async (ev) => {
@@ -814,6 +821,7 @@ pub struct WebState {
     pub config: RuntimeConfig,
     pub live: Arc<RwLock<LiveApp>>,
     pub events_tx: broadcast::Sender<String>,
+    pub shutdown_notify: Arc<tokio::sync::Notify>,
 }
 
 impl WebState {
@@ -839,6 +847,7 @@ impl WebState {
                 last_error: None,
             })),
             events_tx,
+            shutdown_notify: Arc::new(tokio::sync::Notify::new()),
         })
     }
 
@@ -855,25 +864,7 @@ impl WebState {
             return Ok(rev);
         };
 
-        let src = match fs::read_to_string(path) {
-            Ok(s) => s,
-            Err(e) => {
-                let diag = aion_ast::Diagnostic::error(
-                    "E_IO",
-                    aion_ast::Phase::Parser,
-                    format!("failed to read {}: {e}", path.display()),
-                    aion_ast::Span::default(),
-                );
-                let report = DiagnosticReport::from_diagnostics(vec![diag]);
-                self.live.write().unwrap().last_error = Some(report.clone());
-                let _ = self
-                    .events_tx
-                    .send(json!({ "type": "check_error", "report": report }).to_string());
-                return Err(report);
-            }
-        };
-
-        let prog = match parse_program(&src) {
+        let prog = match parse_file_with_includes(path) {
             Ok(p) => p,
             Err(diags) => {
                 let report = DiagnosticReport::from_diagnostics(diags);
@@ -942,6 +933,7 @@ pub fn build_web_router(state: WebState) -> Router {
         .route("/__aion/events", get(serve_sse_events))
         .route("/__aion/reload", post(handle_hot_reload))
         .route("/__aion/restart", post(handle_hot_restart))
+        .route("/__aion/shutdown", post(handle_shutdown))
         .fallback(forward_to_live_api)
         .with_state(state)
 }
@@ -951,9 +943,11 @@ pub async fn serve_web(
     program: Program,
     registry: Arc<ExtRegistry>,
     config: RuntimeConfig,
+    open_browser: bool,
 ) -> Result<(), String> {
     let port = extract_port(&program).unwrap_or(8080);
     let state = WebState::new(file_path.clone(), program, registry, config)?;
+    let shutdown_notify = state.shutdown_notify.clone();
 
     // Spawn live file watcher for automatic Hot Reload on save.
     if let Some(watch_path) = file_path {
@@ -984,13 +978,88 @@ pub async fn serve_web(
 
     let router = build_web_router(state);
     let addr = format!("127.0.0.1:{port}");
-    eprintln!("AION Web Preview (Hot Reload enabled) running at http://{addr}");
+    let url = format!("http://{addr}");
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .map_err(|e| format!("failed to bind {addr}: {e}"))?;
-    axum::serve(listener, router)
-        .await
-        .map_err(|e| format!("server error: {e}"))
+
+    eprintln!("AION Web Preview (Hot Reload enabled) running at {url}");
+    eprintln!("Press Ctrl+C to stop the server.");
+
+    if open_browser {
+        open_url_in_browser(&url);
+    }
+
+    // Race axum::serve against OS termination signals (SIGINT/SIGTERM/SIGHUP) and UI shutdown button.
+    // Dropping the serve future immediately closes open SSE connections and frees the port.
+    tokio::select! {
+        res = axum::serve(listener, router) => {
+            res.map_err(|e| format!("server error: {e}"))
+        }
+        _ = wait_for_termination_signal() => {
+            eprintln!("\nAION Web Preview stopped.");
+            Ok(())
+        }
+        _ = shutdown_notify.notified() => {
+            // Brief flush so the HTTP response to /__aion/shutdown reaches the browser.
+            tokio::time::sleep(Duration::from_millis(80)).await;
+            eprintln!("\nAION Web Preview stopped from browser.");
+            Ok(())
+        }
+    }
+}
+
+fn open_url_in_browser(url: &str) {
+    #[cfg(target_os = "macos")]
+    let _ = std::process::Command::new("open").arg(url).spawn();
+
+    #[cfg(target_os = "linux")]
+    let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+
+    #[cfg(target_os = "windows")]
+    let _ = std::process::Command::new("cmd")
+        .args(["/C", "start", "", url])
+        .spawn();
+}
+
+async fn wait_for_termination_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut sigterm = signal(SignalKind::terminate()).ok();
+        let mut sighup = signal(SignalKind::hangup()).ok();
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = async {
+                if let Some(ref mut s) = sigterm {
+                    s.recv().await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            } => {}
+            _ = async {
+                if let Some(ref mut s) = sighup {
+                    s.recv().await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            } => {}
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
+}
+
+async fn handle_shutdown(State(state): State<WebState>) -> Response {
+    state.shutdown_notify.notify_waiters();
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/json")],
+        r#"{"ok":true,"stopped":true}"#,
+    )
+        .into_response()
 }
 
 fn extract_port(program: &Program) -> Option<u16> {
